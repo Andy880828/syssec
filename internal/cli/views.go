@@ -7,6 +7,7 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/Andy880828/syssec/internal/app"
 	"github.com/Andy880828/syssec/internal/core"
 	"github.com/Andy880828/syssec/internal/diff"
 	"github.com/Andy880828/syssec/internal/intel"
@@ -17,6 +18,7 @@ import (
 // command pages through the rest) and packages are omitted.
 type reportView struct {
 	ScanID      int64             `json:"scan_id,omitempty"`
+	Profile     string            `json:"profile,omitempty"` // summary/findings restricted to this profile
 	StartedAt   string            `json:"started_at"`
 	Host        core.Host         `json:"host"`
 	Summary     core.Summary      `json:"summary"`
@@ -31,6 +33,27 @@ type reportView struct {
 }
 
 const topVulns = 10
+
+// withProfile restricts a report to one profile's checks and recomputes the
+// summary, leaving inventory and vulns untouched. Profiles are views over a
+// full scan, so this works for any stored scan too.
+func withProfile(a *app.App, r *core.Report, profile string) (*core.Report, error) {
+	if profile == "" {
+		return r, nil
+	}
+	if err := a.Checks.ValidateProfile(profile); err != nil {
+		return nil, usageError("list profiles with `syssec checks --json` (field profiles)", "%v", err)
+	}
+	cp := *r
+	cp.Results = nil
+	for _, res := range r.Results {
+		if a.Checks.InProfile(res.ID, profile) {
+			cp.Results = append(cp.Results, res)
+		}
+	}
+	cp.Summary = core.Summarize(cp.Results, len(cp.Packages), cp.Vulns)
+	return &cp, nil
+}
 
 func newReportView(r *core.Report, all bool, min core.Severity) *reportView {
 	v := &reportView{
@@ -198,6 +221,9 @@ func renderReport(w io.Writer, v *reportView) {
 	}
 	if v.Host.Container != "" {
 		fmt.Fprintf(w, "note: inside a %s container — host-level checks are skipped\n", v.Host.Container)
+	}
+	if v.Profile != "" {
+		fmt.Fprintf(w, "profile: %s (score and findings cover this profile only)\n", v.Profile)
 	}
 	if len(v.Findings) > 0 {
 		fmt.Fprintln(w)

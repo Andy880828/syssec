@@ -146,6 +146,7 @@ type CheckMeta struct {
 	Remediation string   `json:"remediation,omitempty"`
 	References  []string `json:"references,omitempty"`
 	Tags        []string `json:"tags,omitempty"`
+	Profiles    []string `json:"profiles,omitempty"` // e.g. cis-l1; see checks.KnownProfiles
 }
 
 // SupportsPlatform reports whether the check applies to GOOS p. An empty

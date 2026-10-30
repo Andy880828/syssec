@@ -48,7 +48,7 @@ func All() []checks.Check {
 	} {
 		out = append(out, set...)
 	}
-	return out
+	return withProfiles(out)
 }
 
 // Register adds the built-in catalog to r.

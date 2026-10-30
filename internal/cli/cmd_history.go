@@ -54,6 +54,7 @@ func historyCmd() *Command {
 		Setup: func(fs *flag.FlagSet) Handler {
 			limit := fs.Int("limit", 20, "number of scans")
 			check := fs.String("check", "", "show the status timeline of this check ID")
+			profile := fs.String("profile", "", "score each scan on one profile only (e.g. cis-l1)")
 			return func(ctx context.Context, rt *Runtime, _ []string) (*Output, error) {
 				a := rt.App(ctx)
 				st, err := a.Store(ctx)
@@ -81,8 +82,20 @@ func historyCmd() *Command {
 				if scans == nil {
 					scans = []store.ScanInfo{}
 				}
+				if *profile != "" { // re-score every scan on the profile's checks
+					for i := range scans {
+						r, err := st.LoadReport(ctx, scans[i].ID)
+						if err != nil {
+							return nil, err
+						}
+						if r, err = withProfile(a, r, *profile); err != nil {
+							return nil, err
+						}
+						scans[i].Score, scans[i].Grade, scans[i].Summary.Failed = r.Summary.Score, r.Summary.Grade, r.Summary.Failed
+					}
+				}
 				tr := computeTrend(scans)
-				data := map[string]any{"scans": scans, "trend": tr}
+				data := map[string]any{"scans": scans, "trend": tr, "profile": *profile}
 				return &Output{Data: data, Human: func(w io.Writer) {
 					if len(scans) == 0 {
 						fmt.Fprintln(w, "No scans yet. Run `syssec scan`.")

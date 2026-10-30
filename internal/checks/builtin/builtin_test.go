@@ -149,3 +149,25 @@ func TestRunningKernelCheck(t *testing.T) {
 		t.Errorf("SYS-007 newest: %+v", o)
 	}
 }
+
+func TestProfiles(t *testing.T) {
+	r := checks.NewRegistry()
+	Register(r)
+	for id := range cisLevel {
+		if _, ok := r.Get(id); !ok {
+			t.Errorf("cisLevel maps unknown check %s", id)
+		}
+	}
+	if !r.InProfile("SSH-001", "cis-l1") || !r.InProfile("SSH-001", "cis-l2") {
+		t.Error("cis-l2 must include cis-l1 checks")
+	}
+	if r.InProfile("KRN-002", "cis-l1") || !r.InProfile("KRN-002", "cis-l2") {
+		t.Error("level-2-only check misplaced")
+	}
+	if r.InProfile("NET-002", "cis-l2") {
+		t.Error("syssec-only checks are in no CIS profile")
+	}
+	if r.ValidateProfile("cis-l3") == nil {
+		t.Error("unknown profile must be rejected")
+	}
+}

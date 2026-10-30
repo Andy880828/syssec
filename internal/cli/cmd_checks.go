@@ -22,6 +22,7 @@ func checksCmd() *Command {
 			platform := fs.String("platform", "current", "current | all | linux | darwin | windows")
 			category := fs.String("category", "", "comma-separated categories")
 			minSev := fs.String("min-severity", "", "minimum severity")
+			profile := fs.String("profile", "", "only checks in this profile (e.g. cis-l1)")
 			return func(ctx context.Context, rt *Runtime, _ []string) (*Output, error) {
 				min, err := parseSeverityFlag("min-severity", *minSev)
 				if err != nil {
@@ -36,14 +37,28 @@ func checksCmd() *Command {
 				default:
 					f.Platform = *platform
 				}
-				var metas []core.CheckMeta
+				if err := a.Checks.ValidateProfile(*profile); err != nil {
+					return nil, usageError("", "%v", err)
+				}
+				metas := []core.CheckMeta{}
 				cats := map[string]int{}
 				for _, c := range a.Checks.Select(f) {
 					m := c.Meta()
+					if *profile != "" && !a.Checks.InProfile(m.ID, *profile) {
+						continue
+					}
 					metas = append(metas, m)
 					cats[m.Category]++
 				}
-				data := map[string]any{"count": len(metas), "categories": cats, "checks": metas}
+				var profiles []checks.ProfileDef
+				for _, p := range a.Checks.Profiles() {
+					def, ok := checks.KnownProfiles[p]
+					if !ok {
+						def = checks.ProfileDef{Name: p, Description: "defined by custom rules"}
+					}
+					profiles = append(profiles, def)
+				}
+				data := map[string]any{"count": len(metas), "categories": cats, "profiles": profiles, "checks": metas}
 				return &Output{Data: data, Warnings: a.Warnings, Human: func(w io.Writer) {
 					t := table(w)
 					for _, m := range metas {

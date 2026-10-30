@@ -68,6 +68,7 @@ func scanCmd() *Command {
 			paths := fs.String("path", "", "comma-separated dirs to scan for lockfiles and Go binaries (default $SYSSEC_PATHS)")
 			noSave := fs.Bool("no-save", false, "do not write to history")
 			all := fs.Bool("all", false, "list passed, skipped and waived checks too")
+			profile := fs.String("profile", "", "report score/findings/gate for one profile, e.g. cis-l1 (all checks still run and are saved)")
 			failOn := fs.String("fail-on", "", "exit 3 if a non-waived item reaches: severity (low..critical) or vuln priority (P0..P3)")
 			return func(ctx context.Context, rt *Runtime, _ []string) (*Output, error) {
 				g, err := parseGate(*failOn)
@@ -89,10 +90,14 @@ func scanCmd() *Command {
 				if err != nil {
 					return nil, err
 				}
-				v := newReportView(res.Report, *all, core.SeverityUnknown)
-				v.Match, v.Diff = res.Match, newDiffView(res.Diff, 20)
+				r, err := withProfile(a, res.Report, *profile)
+				if err != nil {
+					return nil, err
+				}
+				v := newReportView(r, *all, core.SeverityUnknown)
+				v.Profile, v.Match, v.Diff = *profile, res.Match, newDiffView(res.Diff, 20)
 				out := &Output{Data: v, Human: func(w io.Writer) { renderReport(w, v) }, Warnings: res.Warnings}
-				if g != nil && g.breached(res.Report) {
+				if g != nil && g.breached(r) {
 					out.Exit = ExitFindings
 				}
 				return out, nil
@@ -105,21 +110,27 @@ func reportCmd() *Command {
 	return &Command{
 		Name:     "report",
 		Summary:  "show a saved scan without re-scanning (default: latest)",
-		Examples: []string{"syssec report --json", "syssec report --id 12 --all --json"},
+		Examples: []string{"syssec report --json", "syssec report --id 12 --all --json", "syssec report --profile cis-l1 --json"},
 		Setup: func(fs *flag.FlagSet) Handler {
 			id := fs.Int64("id", 0, "scan ID (default latest)")
 			all := fs.Bool("all", false, "list passed, skipped and waived checks too")
 			minSev := fs.String("min-severity", "", "only findings at or above this severity")
+			profile := fs.String("profile", "", "restrict score and findings to one profile, e.g. cis-l1")
 			return func(ctx context.Context, rt *Runtime, _ []string) (*Output, error) {
 				min, err := parseSeverityFlag("min-severity", *minSev)
 				if err != nil {
 					return nil, err
 				}
-				r, err := rt.App(ctx).LoadReport(ctx, *id)
+				a := rt.App(ctx)
+				r, err := a.LoadReport(ctx, *id)
 				if err != nil {
 					return nil, err
 				}
+				if r, err = withProfile(a, r, *profile); err != nil {
+					return nil, err
+				}
 				v := newReportView(r, *all, min)
+				v.Profile = *profile
 				return &Output{Data: v, Human: func(w io.Writer) { renderReport(w, v) }}, nil
 			}
 		},
