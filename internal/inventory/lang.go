@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/fs"
-	"path/filepath"
 	"slices"
 	"strings"
 
@@ -53,8 +52,12 @@ func CollectPaths(ctx context.Context, env *sysenv.Env, roots []string) ([]core.
 	var out []core.Package
 	var errs []error
 	for _, root := range roots {
-		root = filepath.Clean(root)
-		base := strings.Count(root, string(filepath.Separator))
+		// Keep the caller's separator style: env.FS may be the OS filesystem
+		// (\ on Windows) or an abstract one (/), so never filepath.Clean here.
+		if len(root) > 1 {
+			root = strings.TrimRight(root, `/\`)
+		}
+		base := depth(root)
 		err := env.FS.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 			if err != nil {
 				if d != nil && d.IsDir() {
@@ -66,7 +69,7 @@ func CollectPaths(ctx context.Context, env *sysenv.Env, roots []string) ([]core.
 				return ctx.Err()
 			}
 			if d.IsDir() {
-				if p != root && (skipDirs[d.Name()] || strings.Count(p, string(filepath.Separator))-base >= maxDepth) {
+				if p != root && (skipDirs[d.Name()] || depth(p)-base >= maxDepth) {
 					return fs.SkipDir
 				}
 				return nil
@@ -92,6 +95,9 @@ func CollectPaths(ctx context.Context, env *sysenv.Env, roots []string) ([]core.
 	}
 	return out, errs
 }
+
+// depth counts path separators of either style.
+func depth(p string) int { return strings.Count(p, "/") + strings.Count(p, `\`) }
 
 func parserFor(name string) (lockParser, bool) {
 	if lp, ok := lockfiles[name]; ok {
