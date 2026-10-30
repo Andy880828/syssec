@@ -26,6 +26,7 @@ type CheckChange struct {
 	From     core.Status   `json:"from"` // "" when the check did not run before
 	To       core.Status   `json:"to"`
 	Evidence string        `json:"evidence,omitempty"`
+	Previous string        `json:"previous_evidence,omitempty"` // drifted only
 }
 
 // PackageChange is a version change of one package.
@@ -44,6 +45,7 @@ type Diff struct {
 	Regressed  []CheckChange `json:"regressed"`         // became fail/warn
 	Resolved   []CheckChange `json:"resolved"`          // became pass
 	Changed    []CheckChange `json:"changed,omitempty"` // other transitions (e.g. -> skip/error)
+	Drifted    []CheckChange `json:"drifted,omitempty"` // still failing, but what is observed changed
 	Packages   *PackageDelta `json:"packages,omitempty"`
 	Vulns      *VulnDelta    `json:"vulns,omitempty"`
 }
@@ -68,7 +70,7 @@ func (d *Diff) HasRegression() bool {
 
 // Empty reports whether nothing security-relevant changed.
 func (d *Diff) Empty() bool {
-	return len(d.Regressed) == 0 && len(d.Resolved) == 0 && len(d.Changed) == 0 &&
+	return len(d.Regressed) == 0 && len(d.Resolved) == 0 && len(d.Changed) == 0 && len(d.Drifted) == 0 &&
 		(d.Vulns == nil || len(d.Vulns.New)+len(d.Vulns.Fixed) == 0) &&
 		(d.Packages == nil || len(d.Packages.Added)+len(d.Packages.Removed)+len(d.Packages.Upgraded) == 0)
 }
@@ -89,6 +91,13 @@ func Compute(from, to *core.Report) *Diff {
 	for _, r := range to.Results {
 		prev, existed := before[r.ID]
 		if existed && prev.Status == r.Status {
+			// Same problem status, different observation: a new exposed port,
+			// another SUID file, one more NOPASSWD rule. Pass evidence (counts,
+			// "none found") is volatile and deliberately ignored.
+			if isProblem(r.Status) && prev.Evidence != r.Evidence {
+				d.Drifted = append(d.Drifted, CheckChange{ID: r.ID, Title: r.Title, Severity: r.Severity,
+					From: prev.Status, To: r.Status, Evidence: r.Evidence, Previous: prev.Evidence})
+			}
 			continue
 		}
 		c := CheckChange{ID: r.ID, Title: r.Title, Severity: r.Severity, From: prev.Status, To: r.Status, Evidence: r.Evidence}
@@ -105,7 +114,7 @@ func Compute(from, to *core.Report) *Diff {
 			d.Changed = append(d.Changed, c)
 		}
 	}
-	for _, list := range [][]CheckChange{d.Regressed, d.Resolved, d.Changed} {
+	for _, list := range [][]CheckChange{d.Regressed, d.Resolved, d.Changed, d.Drifted} {
 		slices.SortFunc(list, func(a, b CheckChange) int {
 			if a.Severity != b.Severity {
 				return int(b.Severity - a.Severity)
@@ -121,6 +130,8 @@ func Compute(from, to *core.Report) *Diff {
 	}
 	return d
 }
+
+func isProblem(s core.Status) bool { return s == core.StatusFail || s == core.StatusWarn }
 
 func packages(a, b []core.Package) *PackageDelta {
 	pd := &PackageDelta{Added: []core.Package{}, Removed: []core.Package{}, Upgraded: []PackageChange{}}

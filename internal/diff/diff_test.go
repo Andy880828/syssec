@@ -13,6 +13,8 @@ func TestCompute(t *testing.T) {
 			{ID: "B", Status: core.StatusFail, Severity: core.SeverityMedium},
 			{ID: "C", Status: core.StatusFail},
 			{ID: "GONE", Status: core.StatusFail},
+			{ID: "PORTS", Status: core.StatusWarn, Evidence: "1 exposed: tcp/22"},
+			{ID: "COUNT", Status: core.StatusPass, Evidence: "scanned 100 entries"},
 		},
 		Packages: []core.Package{{Name: "openssl", Version: "1", Manager: "dpkg"}, {Name: "telnetd", Version: "1", Manager: "dpkg"}},
 		Vulns:    []core.Vuln{{ID: "CVE-OLD", Package: "openssl"}},
@@ -24,6 +26,8 @@ func TestCompute(t *testing.T) {
 			{ID: "B", Status: core.StatusPass, Severity: core.SeverityMedium},
 			{ID: "C", Status: core.StatusSkip},
 			{ID: "NEW", Status: core.StatusWarn},
+			{ID: "PORTS", Status: core.StatusWarn, Evidence: "2 exposed: tcp/22, tcp/6379"},
+			{ID: "COUNT", Status: core.StatusPass, Evidence: "scanned 101 entries"},
 		},
 		Packages: []core.Package{{Name: "openssl", Version: "2", Manager: "dpkg"}, {Name: "nginx", Version: "1", Manager: "dpkg"}},
 		Vulns:    []core.Vuln{{ID: "CVE-NEW", Package: "nginx"}},
@@ -41,6 +45,9 @@ func TestCompute(t *testing.T) {
 	}
 	if len(d.Changed) != 1 || d.Changed[0].To != core.StatusSkip {
 		t.Errorf("changed: %+v", d.Changed)
+	}
+	if len(d.Drifted) != 1 || d.Drifted[0].ID != "PORTS" || d.Drifted[0].Previous != "1 exposed: tcp/22" {
+		t.Errorf("drift: only problem evidence changes count: %+v", d.Drifted)
 	}
 	p := d.Packages
 	if len(p.Added) != 1 || len(p.Removed) != 1 || len(p.Upgraded) != 1 || p.Upgraded[0].To != "2" {

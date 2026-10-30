@@ -125,6 +125,7 @@ type diffView struct {
 	Regressed       []diff.CheckChange   `json:"regressed"`
 	Resolved        []diff.CheckChange   `json:"resolved"`
 	Changed         []diff.CheckChange   `json:"changed,omitempty"`
+	Drifted         []diff.CheckChange   `json:"drifted,omitempty"`
 	NewVulns        []core.Vuln          `json:"new_vulns,omitempty"`
 	FixedVulns      []core.Vuln          `json:"fixed_vulns,omitempty"`
 	PackagesAdded   []core.Package       `json:"packages_added,omitempty"`
@@ -139,8 +140,8 @@ func newDiffView(d *diff.Diff, limit int) *diffView {
 		return nil
 	}
 	v := &diffView{From: d.From, To: d.To, ScoreDelta: d.ScoreDelta, Regression: d.HasRegression(),
-		Regressed: d.Regressed, Resolved: d.Resolved, Changed: d.Changed, Counts: map[string]int{
-			"regressed": len(d.Regressed), "resolved": len(d.Resolved),
+		Regressed: d.Regressed, Resolved: d.Resolved, Changed: d.Changed, Drifted: d.Drifted, Counts: map[string]int{
+			"regressed": len(d.Regressed), "resolved": len(d.Resolved), "drifted": len(d.Drifted),
 		}}
 	clip := func(n int) int {
 		if limit > 0 && n > limit {
@@ -267,6 +268,12 @@ func renderDiff(w io.Writer, d *diffView) {
 	section("Regressed", d.Regressed)
 	section("Resolved", d.Resolved)
 	section("Changed", d.Changed)
+	if len(d.Drifted) > 0 {
+		fmt.Fprintln(w, "Evidence changed (still failing):")
+		for _, c := range d.Drifted {
+			fmt.Fprintf(w, "  [%s] %s %s\n    was: %s\n    now: %s\n", c.Severity, c.ID, c.Title, c.Previous, c.Evidence)
+		}
+	}
 	if len(d.NewVulns) > 0 {
 		fmt.Fprintf(w, "New vulns (%d):\n", d.Counts["new_vulns"])
 		renderVulns(w, d.NewVulns)
@@ -286,7 +293,7 @@ func renderDiff(w io.Writer, d *diffView) {
 			fmt.Fprintf(w, "  - %s %s\n", p.Name, p.Version)
 		}
 	}
-	if len(d.Regressed)+len(d.Resolved)+len(d.Changed)+d.Counts["new_vulns"]+d.Counts["fixed_vulns"] == 0 {
+	if len(d.Regressed)+len(d.Resolved)+len(d.Changed)+len(d.Drifted)+d.Counts["new_vulns"]+d.Counts["fixed_vulns"] == 0 {
 		fmt.Fprintln(w, "No security-relevant changes.")
 	}
 	if d.Truncated {

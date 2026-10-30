@@ -94,6 +94,8 @@ func statusCmd() *Command {
 						v.LastScan.Regression = &reg
 						if reg {
 							v.Next = append(v.Next, "syssec diff --json  # the last scan regressed")
+						} else if len(d.Drifted) > 0 {
+							v.Next = append(v.Next, fmt.Sprintf("syssec diff --json  # %d failing checks changed evidence (e.g. %s)", len(d.Drifted), d.Drifted[0].ID))
 						}
 					}
 					if v.LastScan.AgeHours > 24 {

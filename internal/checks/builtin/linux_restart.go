@@ -2,7 +2,6 @@ package builtin
 
 import (
 	"context"
-	"fmt"
 	"path"
 	"slices"
 	"strings"
@@ -49,10 +48,11 @@ func restartChecks() []checks.Check {
 					}
 					return checks.Pass("%d processes checked, none use replaced files", u.Processes)
 				}
-				var items []string
+				var items []string // no PIDs: evidence must be stable across restarts for drift tracking
 				for _, s := range u.Stale {
-					items = append(items, fmt.Sprintf("%s[%d]: %s", s.Process, s.PID, path.Base(s.Files[0])))
+					items = append(items, s.Process+": "+path.Base(s.Files[0]))
 				}
+				items = dedupe(items)
 				return checks.Warn("%d processes need a restart: %s", len(u.Stale), sample(items, 10))
 			}),
 	}
