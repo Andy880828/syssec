@@ -26,16 +26,19 @@ func darwinChecks() []checks.Check {
 			[]string{"/usr/libexec/ApplicationFirewall/socketfilterfw", "--getstealthmode"}, `(?i)stealth mode (is )?(enabled|on)`, true),
 		checks.CommandOutput(meta("MAC-006", medium, "updates", "Automatic update checks are enabled", darwin,
 			"`sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled -bool true`"),
-			[]string{"defaults", "read", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled"}, `^1$`, true),
+			// An unset key means the macOS default, which is enabled.
+			[]string{"defaults", "read", "/Library/Preferences/com.apple.SoftwareUpdate", "AutomaticCheckEnabled"}, `(?m)^1$|does not exist`, true),
 		checks.CommandOutput(meta("MAC-007", medium, "updates", "Critical security updates install automatically", darwin,
 			"`sudo defaults write /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall -bool true`"),
-			[]string{"defaults", "read", "/Library/Preferences/com.apple.SoftwareUpdate", "CriticalUpdateInstall"}, `^1$`, true),
+			[]string{"defaults", "read", "/Library/Preferences/com.apple.SoftwareUpdate", "CriticalUpdateInstall"}, `(?m)^1$|does not exist`, true),
 		checks.CommandOutput(meta("MAC-008", low, "accounts", "Guest account is disabled", darwin,
 			"`sudo defaults write /Library/Preferences/com.apple.loginwindow GuestEnabled -bool false`"),
-			[]string{"defaults", "read", "/Library/Preferences/com.apple.loginwindow", "GuestEnabled"}, `^1$`, false),
+			[]string{"defaults", "read", "/Library/Preferences/com.apple.loginwindow", "GuestEnabled"}, `(?m)^1$`, false),
 		checks.CommandOutput(meta("MAC-009", medium, "ssh", "Remote Login (sshd) is disabled", darwin,
 			"System Settings > General > Sharing > Remote Login off, or `sudo systemsetup -setremotelogin off`."),
-			[]string{"launchctl", "print-disabled", "system"}, `"com\.openssh\.sshd" => (true|disabled)`, true),
+			// Fail only when explicitly enabled: an unlisted service keeps its
+			// launchd default, which is disabled for sshd.
+			[]string{"launchctl", "print-disabled", "system"}, `"com\.openssh\.sshd" => (false|enabled)`, false),
 		checks.CommandOutput(core.CheckMeta{ID: "MAC-010", Severity: medium, Category: "system", Title: "Automatic login is disabled",
 			Platforms: darwin, Remediation: "`sudo defaults delete /Library/Preferences/com.apple.loginwindow autoLoginUser`"},
 			[]string{"defaults", "read", "/Library/Preferences/com.apple.loginwindow", "autoLoginUser"}, `(?i)does not exist`, true),

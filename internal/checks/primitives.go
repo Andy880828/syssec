@@ -189,13 +189,29 @@ func CommandOutput(m core.CheckMeta, argv []string, pattern string, present bool
 		if err != nil && text == "" {
 			return Errorf("%s: %v", argv[0], err)
 		}
-		first := text
-		if i := strings.IndexByte(first, '\n'); i >= 0 {
-			first = first[:i]
-		}
+		evidence := commandEvidence(text, re)
 		if re.MatchString(text) == present {
-			return Pass("%s", first)
+			return Pass("%s", evidence)
 		}
-		return Fail("%s", first)
+		return Fail("%s", evidence)
 	})
+}
+
+// commandEvidence picks the most informative line: the one that matched,
+// else the last meaningful line (tools like `defaults` print a log-stamped
+// line before the actual message), marked as a non-match.
+func commandEvidence(text string, re *regexp.Regexp) string {
+	lines := strings.Split(text, "\n")
+	for _, l := range lines {
+		if re.MatchString(l) {
+			return strings.TrimSpace(l)
+		}
+	}
+	last := "(no output)"
+	for _, l := range lines {
+		if l = strings.TrimSpace(l); strings.Trim(l, "{}()[];,") != "" {
+			last = l
+		}
+	}
+	return fmt.Sprintf("%s (no match for /%s/)", last, re)
 }

@@ -113,13 +113,25 @@ func TestDarwinCommandRules(t *testing.T) {
 		"csrutil status":  "System Integrity Protection status: enabled.",
 		"defaults read /Library/Preferences/com.apple.loginwindow GuestEnabled": "1",
 	}}
+	missing := "2026-10-30 12:10:49.445 defaults[1590:8628] \nThe domain/default pair of (/Library/Preferences/com.apple.SoftwareUpdate, CriticalUpdateInstall) does not exist"
+	env.Exec.(sysenv.FakeRunner)["defaults read /Library/Preferences/com.apple.SoftwareUpdate AutomaticCheckEnabled"] = "0"
+	env.Exec.(sysenv.FakeRunner)["defaults read /Library/Preferences/com.apple.SoftwareUpdate CriticalUpdateInstall"] = missing
+	env.Exec.(sysenv.FakeRunner)["launchctl print-disabled system"] = "disabled services = {\n\t\"com.apple.ftpd\" => disabled\n}"
 	for id, want := range map[string]core.Status{
 		"MAC-001": core.StatusFail, "MAC-002": core.StatusPass, "MAC-003": core.StatusPass,
 		"MAC-008": core.StatusFail, "MAC-004": core.StatusSkip,
+		"MAC-006": core.StatusFail, "MAC-007": core.StatusPass, "MAC-009": core.StatusPass,
 	} {
 		if o := run(t, env, id); o.Status != want {
 			t.Errorf("%s: want %s got %+v", id, want, o)
 		}
+	}
+	if o := run(t, env, "MAC-007"); !strings.HasPrefix(o.Evidence, "The domain/default pair") {
+		t.Errorf("evidence should be the meaningful line, got %q", o.Evidence)
+	}
+	env.Exec.(sysenv.FakeRunner)["launchctl print-disabled system"] = "disabled services = {\n\t\"com.openssh.sshd\" => enabled\n}"
+	if o := run(t, env, "MAC-009"); o.Status != core.StatusFail || o.Evidence != `"com.openssh.sshd" => enabled` {
+		t.Errorf("explicitly enabled sshd must fail with the matching line: %+v", o)
 	}
 }
 
