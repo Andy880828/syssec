@@ -61,7 +61,7 @@ func describeCmd() *Command {
 					"exit_codes":  map[string]string{"0": "success", "1": "runtime error", "2": "usage error", "3": "--fail-on threshold reached"},
 					"error_codes": map[string]string{"usage": "bad flags/args; see hint", "no_data": "nothing recorded yet; run the hinted command", "not_found": "unknown ID", "network": "intel source unreachable; offline commands still work", "runtime": "anything else"},
 					"statuses":    map[string]string{"pass": "compliant", "fail": "non-compliant", "warn": "likely issue or unverifiable", "skip": "not applicable/not readable", "error": "probe failed", "waived": "accepted risk (see waiver)"},
-					"priorities":  map[string]string{"P0": "CISA KEV: exploited in the wild", "P1": "EPSS >= 0.1, or critical with a fix", "P2": "high/critical, or EPSS >= 0.01", "P3": "the rest"},
+					"priorities":  map[string]string{"P0": "CISA KEV: exploited in the wild", "P1": "EPSS >= 0.1, or critical with a fix, or high+ with a fix loaded by a running process", "P2": "high/critical, or EPSS >= 0.01", "P3": "the rest"},
 					"env": map[string]string{
 						"SYSSEC_OUTPUT":          "set to 'json' to force JSON output",
 						"SYSSEC_DB":              "SQLite database path",

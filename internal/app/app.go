@@ -18,6 +18,7 @@ import (
 	"github.com/Andy880828/syssec/internal/diff"
 	"github.com/Andy880828/syssec/internal/intel"
 	"github.com/Andy880828/syssec/internal/inventory"
+	"github.com/Andy880828/syssec/internal/reach"
 	"github.com/Andy880828/syssec/internal/store"
 	"github.com/Andy880828/syssec/internal/sysenv"
 	"github.com/Andy880828/syssec/internal/version"
@@ -153,6 +154,9 @@ func (a *App) Scan(ctx context.Context, opt ScanOptions) (*ScanOutcome, error) {
 			r.Errors = append(r.Errors, "vuln match: "+err.Error())
 		} else {
 			r.Vulns, r.VulnScanned = vulns, true
+			if a.Env.GOOS == "linux" {
+				a.annotateReachability(ctx, r)
+			}
 			if stats.Unmatchable == stats.Packages && stats.Packages > 0 {
 				out.Warnings = append(out.Warnings, "no package on this host maps to an OSV ecosystem; vuln matching covers dpkg (Debian/Ubuntu), apk (Alpine), rpm (Rocky/Alma)")
 			}
@@ -187,6 +191,22 @@ func (a *App) Scan(ctx context.Context, opt ScanOptions) (*ScanOutcome, error) {
 		}
 	}
 	return out, nil
+}
+
+// annotateReachability marks vulns whose package code is mapped by a
+// running process, then re-prioritises: running + fixable + high is P1.
+func (a *App) annotateReachability(ctx context.Context, r *core.Report) {
+	u, err := reach.Scan(a.Env)
+	if err != nil {
+		r.Errors = append(r.Errors, "reachability: "+err.Error())
+		return
+	}
+	owners := inventory.Owners(ctx, a.Env, u.Files(), reach.Canonicalizer(a.Env.FS))
+	u.Annotate(r.Vulns, r.Packages, owners)
+	for i := range r.Vulns {
+		r.Vulns[i].Prioritize()
+	}
+	core.SortVulns(r.Vulns)
 }
 
 // LoadReport loads a stored scan (0 = latest).

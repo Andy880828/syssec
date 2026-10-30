@@ -72,6 +72,10 @@ var migrations = []string{
 	ALTER TABLE vulns ADD COLUMN priority TEXT NOT NULL DEFAULT '';
 	ALTER TABLE vulns ADD COLUMN waiver TEXT NOT NULL DEFAULT '';
 	ALTER TABLE results ADD COLUMN waiver TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE vulns ADD COLUMN in_use INTEGER NOT NULL DEFAULT -1;
+	ALTER TABLE vulns ADD COLUMN processes TEXT NOT NULL DEFAULT '';
+	ALTER TABLE vulns ADD COLUMN path TEXT NOT NULL DEFAULT '';
+	ALTER TABLE packages ADD COLUMN path TEXT NOT NULL DEFAULT '';`,
 }
 
 // Open opens (creating if needed) the database and applies migrations.
@@ -180,18 +184,22 @@ func (s *Store) SaveReport(ctx context.Context, r *core.Report) (int64, error) {
 	}); err != nil {
 		return 0, err
 	}
-	if err := bulk(ctx, tx, `INSERT INTO packages (scan_id, manager, name, version, arch, ecosystem, source_name, source_version)
-		VALUES (?,?,?,?,?,?,?,?)`, len(r.Packages), func(i int) []any {
+	if err := bulk(ctx, tx, `INSERT INTO packages (scan_id, manager, name, version, arch, ecosystem, source_name, source_version, path)
+		VALUES (?,?,?,?,?,?,?,?,?)`, len(r.Packages), func(i int) []any {
 		p := r.Packages[i]
-		return []any{id, p.Manager, p.Name, p.Version, p.Arch, p.Ecosystem, p.SourceName, p.SourceVersion}
+		return []any{id, p.Manager, p.Name, p.Version, p.Arch, p.Ecosystem, p.SourceName, p.SourceVersion, p.Path}
 	}); err != nil {
 		return 0, err
 	}
-	if err := bulk(ctx, tx, `INSERT INTO vulns (scan_id, vuln_id, package, version, ecosystem, severity, cvss, kev, fixed_in, summary, aliases, epss, priority, waiver)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, len(r.Vulns), func(i int) []any {
+	if err := bulk(ctx, tx, `INSERT INTO vulns (scan_id, vuln_id, package, version, ecosystem, severity, cvss, kev, fixed_in, summary, aliases, epss, priority, waiver, in_use, processes, path)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`, len(r.Vulns), func(i int) []any {
 		v := r.Vulns[i]
+		inUse := -1
+		if v.InUse != nil {
+			inUse = b2i(*v.InUse)
+		}
 		return []any{id, v.ID, v.Package, v.Version, v.Ecosystem, v.Severity.String(), v.CVSS, b2i(v.KEV), v.FixedIn, v.Summary,
-			strings.Join(v.Aliases, ","), v.EPSS, v.Priority, optJSON(v.Waiver)}
+			strings.Join(v.Aliases, ","), v.EPSS, v.Priority, optJSON(v.Waiver), inUse, strings.Join(v.Processes, ","), v.Path}
 	}); err != nil {
 		return 0, err
 	}
@@ -310,10 +318,10 @@ func (s *Store) LoadReport(ctx context.Context, id int64) (*core.Report, error) 
 		return nil, err
 	}
 	core.SortResults(r.Results)
-	if err := each(ctx, s.db, `SELECT manager, name, version, arch, ecosystem, source_name, source_version FROM packages WHERE scan_id = ?`, id,
+	if err := each(ctx, s.db, `SELECT manager, name, version, arch, ecosystem, source_name, source_version, path FROM packages WHERE scan_id = ?`, id,
 		func(sc func(...any) error) error {
 			var p core.Package
-			if err := sc(&p.Manager, &p.Name, &p.Version, &p.Arch, &p.Ecosystem, &p.SourceName, &p.SourceVersion); err != nil {
+			if err := sc(&p.Manager, &p.Name, &p.Version, &p.Arch, &p.Ecosystem, &p.SourceName, &p.SourceVersion, &p.Path); err != nil {
 				return err
 			}
 			r.Packages = append(r.Packages, p)
@@ -321,13 +329,21 @@ func (s *Store) LoadReport(ctx context.Context, id int64) (*core.Report, error) 
 		}); err != nil {
 		return nil, err
 	}
-	if err := each(ctx, s.db, `SELECT vuln_id, package, version, ecosystem, severity, cvss, kev, fixed_in, summary, aliases, epss, priority, waiver
+	if err := each(ctx, s.db, `SELECT vuln_id, package, version, ecosystem, severity, cvss, kev, fixed_in, summary, aliases, epss, priority, waiver, in_use, processes, path
 		FROM vulns WHERE scan_id = ?`, id,
 		func(sc func(...any) error) error {
 			var v core.Vuln
-			var sev, aliases, waiver string
-			if err := sc(&v.ID, &v.Package, &v.Version, &v.Ecosystem, &sev, &v.CVSS, &v.KEV, &v.FixedIn, &v.Summary, &aliases, &v.EPSS, &v.Priority, &waiver); err != nil {
+			var sev, aliases, waiver, procs string
+			var inUse int
+			if err := sc(&v.ID, &v.Package, &v.Version, &v.Ecosystem, &sev, &v.CVSS, &v.KEV, &v.FixedIn, &v.Summary, &aliases, &v.EPSS, &v.Priority, &waiver, &inUse, &procs, &v.Path); err != nil {
 				return err
+			}
+			if inUse >= 0 {
+				v.InUse = new(bool)
+				*v.InUse = inUse == 1
+			}
+			if procs != "" {
+				v.Processes = strings.Split(procs, ",")
 			}
 			v.Waiver = parseOpt[core.Waiver](waiver)
 			if v.Priority == "" { // scans recorded before priorities existed

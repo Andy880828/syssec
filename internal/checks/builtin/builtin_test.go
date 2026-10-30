@@ -122,3 +122,30 @@ func TestDarwinCommandRules(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionCompare(t *testing.T) {
+	for _, c := range [][2]string{
+		{"6.8.0-47-generic", "6.8.0-100-generic"},
+		{"5.15.0-1", "6.1.0-1"},
+		{"6.10.3-200.fc40.x86_64", "6.10.10-200.fc40.x86_64"},
+	} {
+		if VersionCompare(c[0], c[1]) >= 0 || VersionCompare(c[1], c[0]) <= 0 {
+			t.Errorf("%s should sort before %s", c[0], c[1])
+		}
+	}
+}
+
+func TestRunningKernelCheck(t *testing.T) {
+	fs := sysenv.MemFS{
+		"boot/vmlinuz-6.8.0-47-generic":  &fstest.MapFile{},
+		"boot/vmlinuz-6.8.0-100-generic": &fstest.MapFile{},
+	}
+	env := &sysenv.Env{GOOS: "linux", FS: fs, Host: core.Host{Kernel: "6.8.0-47-generic"}}
+	if o := run(t, env, "SYS-007"); o.Status != core.StatusFail || !strings.Contains(o.Evidence, "100") {
+		t.Errorf("SYS-007: %+v", o)
+	}
+	env.Host.Kernel = "6.8.0-100-generic"
+	if o := run(t, env, "SYS-007"); o.Status != core.StatusPass {
+		t.Errorf("SYS-007 newest: %+v", o)
+	}
+}

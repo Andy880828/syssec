@@ -207,10 +207,17 @@ type Package struct {
 	Ecosystem     string `json:"ecosystem,omitempty"` // OSV ecosystem; empty = not matchable
 	SourceName    string `json:"source_name,omitempty"`
 	SourceVersion string `json:"source_version,omitempty"`
+	Path          string `json:"path,omitempty"` // lockfile or binary it came from (language ecosystems)
 }
 
 // Key identifies a package independently of its version.
-func (p Package) Key() string { return p.Manager + "/" + p.Name + ":" + p.Arch }
+func (p Package) Key() string {
+	k := p.Manager + "/" + p.Name + ":" + p.Arch
+	if p.Path != "" {
+		k += "@" + p.Path
+	}
+	return k
+}
 
 // Query returns the name/version pair advisories are keyed on. Debian-style
 // advisories are published against source packages.
@@ -237,22 +244,29 @@ type Vuln struct {
 	EPSS      float64  `json:"epss,omitempty"` // FIRST EPSS: probability of exploitation in 30 days
 	Priority  string   `json:"priority"`       // P0..P3, see Prioritize
 	FixedIn   string   `json:"fixed_in,omitempty"`
+	InUse     *bool    `json:"in_use,omitempty"`    // code mapped by a running process; nil = unknown
+	Processes []string `json:"processes,omitempty"` // up to 5 process names using it
+	Path      string   `json:"path,omitempty"`      // lockfile/binary for language packages
 	Summary   string   `json:"summary,omitempty"`
 	Aliases   []string `json:"aliases,omitempty"`
 	Waiver    *Waiver  `json:"waiver,omitempty"`
 }
 
+// Running reports whether the vulnerable code is known to be loaded.
+func (v Vuln) Running() bool { return v.InUse != nil && *v.InUse }
+
 // Prioritize assigns a transparent, explainable fix priority:
 //
 //	P0  exploited in the wild (CISA KEV)
-//	P1  likely to be exploited (EPSS >= 0.1) or critical with a fix available
+//	P1  likely to be exploited (EPSS >= 0.1), critical with a fix available,
+//	    or high+ with a fix and loaded by a running process
 //	P2  high/critical severity, or EPSS >= 0.01
 //	P3  everything else
 func (v *Vuln) Prioritize() {
 	switch {
 	case v.KEV:
 		v.Priority = "P0"
-	case v.EPSS >= 0.1 || (v.Severity == SeverityCritical && v.FixedIn != ""):
+	case v.EPSS >= 0.1 || (v.FixedIn != "" && (v.Severity == SeverityCritical || (v.Severity >= SeverityHigh && v.Running()))):
 		v.Priority = "P1"
 	case v.Severity >= SeverityHigh || v.EPSS >= 0.01:
 		v.Priority = "P2"
@@ -262,7 +276,7 @@ func (v *Vuln) Prioritize() {
 }
 
 // Key identifies a vulnerability instance on a package.
-func (v Vuln) Key() string { return v.ID + "@" + v.Package }
+func (v Vuln) Key() string { return v.ID + "@" + v.Package + v.Path }
 
 // SortVulns orders vulns by priority, exploit probability, severity, score, then ID.
 func SortVulns(vs []Vuln) {
@@ -338,6 +352,7 @@ type Summary struct {
 	VulnsBySeverity map[string]int `json:"vulns_by_severity,omitempty"`
 	KEV             int            `json:"kev"`
 	Fixable         int            `json:"fixable"` // vulns with a published fixed version
+	Running         int            `json:"running"` // vulns in code loaded by a running process
 	Waived          int            `json:"waived"`  // checks + vulns covered by a waiver
 }
 
@@ -406,6 +421,9 @@ func Summarize(results []Result, packages int, vulns []Vuln) Summary {
 		}
 		if v.FixedIn != "" {
 			s.Fixable++
+		}
+		if v.Running() {
+			s.Running++
 		}
 	}
 	return s

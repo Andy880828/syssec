@@ -44,7 +44,7 @@ func All() []checks.Check {
 	var out []checks.Check
 	for _, set := range [][]checks.Check{
 		sshChecks(), kernelChecks(), networkSysctlChecks(), filesystemChecks(),
-		accountChecks(), networkChecks(), linuxSystemChecks(), darwinChecks(), windowsChecks(),
+		accountChecks(), networkChecks(), linuxSystemChecks(), restartChecks(), darwinChecks(), windowsChecks(),
 	} {
 		out = append(out, set...)
 	}

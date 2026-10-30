@@ -121,11 +121,12 @@ func reportCmd() *Command {
 func vulnsCmd() *Command {
 	return &Command{
 		Name:    "vulns",
-		Summary: "list vulnerabilities from a saved scan, prioritised (P0 KEV > P1 likely exploited > P2 > P3)",
+		Summary: "list vulnerabilities from a saved scan, prioritised (P0 KEV > P1 likely exploited/running > P2 > P3)",
 		Examples: []string{
 			"syssec vulns --priority P1 --json         # what to patch first",
 			"syssec vulns --fixable --limit 0 --json   # everything patchable now",
 			"syssec vulns --package openssl --json     # am I affected via openssl?",
+			"syssec vulns --running --fixable --json   # loaded right now and patchable",
 		},
 		Setup: func(fs *flag.FlagSet) Handler {
 			id := fs.Int64("id", 0, "scan ID (default latest)")
@@ -133,6 +134,7 @@ func vulnsCmd() *Command {
 			minSev := fs.String("min-severity", "", "keep this severity and above (KEV always kept)")
 			kev := fs.Bool("kev", false, "only CISA KEV (actively exploited)")
 			fixable := fs.Bool("fixable", false, "only vulns with a published fixed version")
+			running := fs.Bool("running", false, "only vulns in code loaded by a running process (Linux)")
 			pkg := fs.String("package", "", "substring match on package name")
 			waived := fs.Bool("waived", false, "include waived vulns")
 			limit := fs.Int("limit", 50, "max vulns returned (0 = all)")
@@ -152,7 +154,7 @@ func vulnsCmd() *Command {
 				if !r.VulnScanned {
 					return nil, &Error{Code: "no_data", Message: fmt.Sprintf("scan #%d has no vulnerability data", r.ID), Hint: "run `syssec scan --vulns --json`"}
 				}
-				f := vulnFilter{MinSeverity: min, MaxPriority: p, KEV: *kev, Fixable: *fixable, Package: *pkg, Waived: *waived}
+				f := vulnFilter{MinSeverity: min, MaxPriority: p, KEV: *kev, Fixable: *fixable, Running: *running, Package: *pkg, Waived: *waived}
 				matched := f.apply(r.Vulns)
 				shown := matched
 				if *limit > 0 && len(shown) > *limit {

@@ -53,6 +53,7 @@ type vulnFilter struct {
 	MaxPriority string // "P1" keeps P0+P1
 	KEV         bool
 	Fixable     bool
+	Running     bool // only vulns in code loaded by a running process
 	Package     string
 	Waived      bool // include waived vulns
 	Limit       int  // 0 = unlimited
@@ -64,6 +65,7 @@ func (f vulnFilter) match(v core.Vuln) bool {
 		(f.MaxPriority == "" || v.Priority <= f.MaxPriority) &&
 		(!f.KEV || v.KEV) &&
 		(!f.Fixable || v.FixedIn != "") &&
+		(!f.Running || v.Running()) &&
 		(f.Package == "" || strings.Contains(strings.ToLower(v.Package), strings.ToLower(f.Package)))
 }
 
@@ -238,6 +240,9 @@ func renderVulns(w io.Writer, vs []core.Vuln) {
 		epss := ""
 		if v.EPSS > 0 {
 			epss = fmt.Sprintf("epss %.0f%%", v.EPSS*100)
+		}
+		if v.Running() {
+			epss += " RUN"
 		}
 		fmt.Fprintf(t, "  %s\t%s\t%s\t%s\t%s %s\tfix: %s\t%s\n", v.Priority, v.Severity, epss, v.ID, v.Package, v.Version, fix, v.Summary)
 	}
