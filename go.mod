@@ -2,6 +2,8 @@ module github.com/Andy880828/syssec
 
 go 1.24.7
 
+toolchain go1.26.10
+
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect

@@ -62,6 +62,10 @@ returns one command's schema.
 | "What should I patch first?" | `syssec vulns --priority P1 --json` |
 | "Anything actively exploited?" | `syssec vulns --kev --json` |
 | "What can I patch right now?" | `syssec vulns --fixable --limit 0 --json` |
+| "What vulnerable code is actually running?" | `syssec vulns --running --json` (Linux; processes listed) |
+| "Did my patch take effect?" | `syssec report --all --json` → SYS-007 (kernel) and SYS-008 (services to restart) |
+| "Check our apps' dependencies too" | `syssec scan --vulns --path /srv/app --json` (keep the same paths every run) |
+| "How do we do against CIS?" | `syssec report --profile cis-l1 --json`; trend: `syssec history --profile cis-l1 --json` |
 | "Are we affected by CVE-X?" | `syssec vulns --limit 0 --json`, search `id`/`aliases`; then `syssec explain CVE-X --json` |
 | "Is package P vulnerable?" | `syssec vulns --package P --json` |
 | "Why is check X failing / how to fix?" | `syssec explain X --json` |
@@ -100,7 +104,7 @@ same as severity.
 | priority | rule |
 |---|---|
 | `P0` | in CISA KEV: exploited in the wild. Patch now. |
-| `P1` | EPSS ≥ 0.10 (likely to be exploited soon), or critical with a fix available |
+| `P1` | EPSS ≥ 0.10 (likely to be exploited soon), critical with a fix available, or high+ with a fix in code a running process has loaded |
 | `P2` | high/critical severity, or EPSS ≥ 0.01 |
 | `P3` | everything else |
 
@@ -109,6 +113,12 @@ same as severity.
   claim that upgrading helps.
 - `aliases` holds the other advisory IDs for the same CVE (USN, DSA, GHSA…).
   Duplicates are already merged.
+- `in_use: true` means a running process has the vulnerable package's files
+  mapped, and `processes` names the processes. `false` means confirmed not
+  loaded; a missing field means unknown (not Linux, not root, or a language
+  dependency). Patching running code also needs a restart, so check SYS-008.
+- `path` is set for language packages (lockfile or Go binary). The fix is a
+  dependency bump in that project, not an OS upgrade.
 - Kernel header and source packages (`linux-libc-dev`, `linux-headers-*`)
   are excluded from matching because they do not run. See
   `vuln_match.excluded`.
@@ -118,6 +128,14 @@ same as severity.
 - `top_vulns` holds at most 10 entries; use `vulns` for the rest.
 - `diff` compares with the previous complete scan. `regression: true` means
   something got worse. `regressed[].from == ""` means a new check.
+  `drifted[]` lists checks that are still failing but whose evidence changed
+  (`previous_evidence` vs `evidence`), such as a new exposed port or another
+  SUID file. Treat drift as possible intrusion or misconfiguration and
+  surface it even when `regression` is false. `notes[]` warns when the
+  scanned `--path` sets differ.
+- `profile` is set when `--profile` was used. The score, findings and gate
+  then cover only that profile. Profiles are views: every scan still runs
+  and stores all checks. CIS mapping is by level intent, not certified.
 - `next_steps` lists ready-to-run follow-ups and is a sensible default plan.
 - `partial: true` means only a subset ran (`--check`/`--category`). Partial
   scans are never saved.
@@ -136,10 +154,11 @@ Docker/Kubernetes hosts, which makes it a waiver candidate rather than a fix.
 
 ## 5. Workflows
 
-**Scheduled monitoring, driven by you or by cron**
+**Scheduled monitoring, driven by you (e.g. your own cron)**
 ```bash
 syssec scan --vulns --json > /tmp/scan.json   # saved and diffed automatically
-# alert the user only if data.diff.regression is true or data.summary.kev > 0
+# alert the user if data.diff.regression is true, data.diff.drifted is
+# non-empty, or data.summary.kev > 0; stay quiet otherwise
 ```
 
 **Investigating a regression**
@@ -155,9 +174,11 @@ syssec explain CVE-XXXX-YYYY --json    # advisory, KEV entry, EPSS, fixed versio
 syssec vulns --limit 0 --json          # is it on this host? (match id or aliases)
 syssec inventory --filter <pkg> --json # installed version
 ```
-If `vuln_scanned` is false, scan with `--vulns` first. Matching covers
+If `vuln_scanned` is false, scan with `--vulns` first. OS matching covers
 dpkg (Debian/Ubuntu), apk (Alpine) and rpm (Rocky/Alma). Other platforms are
-inventory-only; `inventory` reports `vuln_matchable`.
+inventory-only for OS packages; `inventory` reports `vuln_matchable`.
+Language packages from `--path` are matched on every platform (Go, npm,
+PyPI, crates.io, Packagist, RubyGems).
 
 ## 6. Cost model
 
@@ -173,7 +194,11 @@ inventory-only; `inventory` reports `vuln_matchable`.
 
 ## 7. Extending
 
+- Set `SYSSEC_PATHS` once (e.g. in the cron environment) so every scan
+  covers the same project directories and diffs stay clean.
 - Drop JSON rule packs into `$SYSSEC_HOME/rules/` (or `SYSSEC_RULES_DIR`).
+  A rule's `"profiles": ["org-baseline"]` makes `--profile org-baseline`
+  available.
   Supported types: `sysctl`, `sshd`, `file_mode`, `file_regex`, `registry`,
   `command`. Add the tag `"host-only"` for host-level controls. Examples are
   in `examples/rules/`.

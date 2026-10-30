@@ -108,13 +108,22 @@
 
 **不自動偵測 agent**（例如看到 `CLAUDECODE=1` 就自動輸出 JSON）：這種隱式行為會讓人類和 agent 看到不同結果，難以除錯。改用明確的 `--json` 或 `SYSSEC_OUTPUT=json`。
 
-## 5. 新功能構想（未實作，依價值排序）
+## 5. 新功能（v3 已實作 1–5）
 
-1. **執行期可達性（runtime reachability）**：讀 `/proc/*/maps` 和 dpkg/rpm 的檔案清單，判斷有漏洞的函式庫是否真的被某個執行中的 process 載入，並加上 `in_use: true` 和 process 名稱。這是 Defender VM 這類商用產品的賣點，在 Linux 上用純 Go 就能做到，而且成本很低。
-2. **證據變化追蹤**：目前 `diff` 只看狀態轉換。`NET-002` 開了新的對外 port，或 `FS-021` 多了一個 SUID 檔案，狀態可能沒變但證據變了，對入侵偵測很有價值。
-3. **執行中與已安裝的 kernel 比較**：已安裝較新的 `linux-image` 但還沒重開機時提出警告，可以跨發行版取代只有 Debian 系才有的 `reboot-required`。
-4. **語言生態系 lockfile**：`syssec scan --path ./repo` 讀取 `go.sum`、`package-lock.json`、`poetry.lock`，用同一套 OSV 和 EPSS 流程比對。
-5. **CIS profile**：在 meta 加上 `cis: ["5.2.10"]` 對照，並支援 `--profile cis-l1`；JSON 規則包也能定義自己的 profile。
-6. **SBOM / VEX**：用 `inventory --format cyclonedx` 輸出 SBOM，並匯入 OpenVEX 當成機器產生的 waiver。
-7. **MCP server 模式**：`syssec mcp` 把同一棵指令樹開放成 MCP tools，schema 直接從 `describe` 產生。
-8. **多主機彙整**：用 `report --export` 和 `merge` 匯總多台主機的報告，產生 fleet 走勢。
+| # | 功能 | 實作方式 | 實測 |
+|---|---|---|---|
+| 1 | **執行期可達性** | `reach` 讀 `/proc/*/maps`；`inventory.Owners` 從 dpkg `.list`、apk 資料庫、pacman `files` 或 `rpm -qf` 反查檔案屬於哪個套件，並處理 usrmerge（`/lib` → `/usr/lib`）。漏洞因此多出 `in_use` 和 `processes` 欄位。P1 新增一條：high 以上、有修補、且正被執行中的程式載入 | 這台主機 560 個漏洞中有 16 個在執行中的程式碼裡（glibc 在 bash/grep 中，pcre2 在 grep 中）。`vulns --running` 可直接篩選 |
+| 2 | **證據變化追蹤** | `diff.drifted`：狀態仍是 fail/warn、但證據改變的檢查，會列出前後兩份證據。pass 的證據（計數之類）變化大，刻意忽略；SYS-008 的證據不含 PID，避免重啟就被當成變化 | 單元測試涵蓋（例如新開了 6379 port）。在這個環境裡開對外 port 被權限擋下，所以沒做實機驗證 |
+| 3 | **重啟缺口** | SYS-007：從 `/boot/vmlinuz-*` 或 `/lib/modules` 找出已安裝的最新 kernel，和執行中的 kernel 做版本比較（跨發行版）。SYS-008：仍載入已被刪除的系統函式庫的 process（類似 needrestart） | 這台 VM 的 kernel 由 hypervisor 提供，所以兩條都正確地標成 skip |
+| 4 | **語言生態系** | `--path` 或 `SYSSEC_PATHS`：解析 go.mod、package-lock.json（v1–v3）、yarn.lock、requirements*.txt、poetry.lock、uv.lock、Pipfile.lock、Cargo.lock、composer.lock、Gemfile.lock，另外用標準庫 `debug/buildinfo` 讀 Go binary 內嵌的模組清單和 stdlib 版本。報告會記錄掃描了哪些路徑；路徑不同時 `diff.notes` 會提醒 | 抓到 lodash、minimist、pyyaml、requests 的已知漏洞。也發現 **syssec 自己的 binary**（Go 1.24.7，已 EOL）有 59 個 stdlib 漏洞，因此 `go.mod` 改設 `toolchain go1.26.10`，重新掃描後歸零 |
+| 5 | **Profile** | 在檢查的 metadata 加上 `Profiles`，`cis-l2` 包含 `cis-l1`，JSON 規則也能自訂 profile。**profile 是一種檢視方式，不是只跑部分規則的部分掃描**：掃描時仍然執行並儲存全部規則，`--profile` 只是重新計算分數、findings 和 `--fail-on`。所以任何一次舊掃描都能用 profile 重新計分，`history --profile` 也能畫出 CIS 走勢 | 全部檢查 80（B）、cis-l1 81（B）、cis-l2 79（C） |
+
+**CIS 對照的誠實聲明**：CIS 的章節編號依 benchmark 而異（Ubuntu、RHEL、macOS、Windows 各不相同），所以這裡只依 Level 1 / Level 2 的設計意圖對照，不宣稱等同於經認證的 CIS 評估。
+
+## 6. 後續構想
+
+1. **SBOM / VEX**：用 `inventory --format cyclonedx` 輸出 SBOM，並匯入 OpenVEX 當成機器產生的 waiver。
+2. **多主機彙整**：用 `report --export` 和 `merge` 匯總多台主機的報告，產生 fleet 走勢。
+3. **macOS / Windows 的可達性**：macOS 可用 `vmmap`，Windows 可列舉 process 載入的模組，讓 `in_use` 跨平台。
+
+**不做 MCP server**：排程和判斷都交給 agent（例如由 agent 自己跑 cron），syssec 只需要做好「一個 CLI 指令加上穩定的 JSON」這件事。改成 MCP 會多出一層常駐程序和另一套 schema，對這個分工沒有幫助。

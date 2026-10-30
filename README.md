@@ -36,7 +36,7 @@ make build      # → bin/syssec
 make cross      # → dist/ 下 linux/darwin/windows × amd64/arm64
 ```
 
-需要 Go 1.24 以上。產出的二進位檔是 `CGO_ENABLED=0`，可以直接複製到目標主機執行。
+需要 Go 1.24 以上；`go.mod` 指定了 `toolchain go1.26.10`，確保編出來的 binary 使用已修補的標準庫（syssec 會用 `--path` 掃描自己的 binary 驗證這一點）。產出的二進位檔是 `CGO_ENABLED=0`，可以直接複製到目標主機執行。
 
 ## 指令
 
@@ -45,17 +45,25 @@ make cross      # → dist/ 下 linux/darwin/windows × amd64/arm64
 | `status` | 一次看完：上次掃描、是否退步、情資新鮮度、例外狀態、下一步建議 | 否 |
 | `scan` | 檢查、套件盤點（加 `--vulns` 會比對漏洞）、套用例外、存檔，並和前一次比較 | 只有 `--vulns` 且快取過期時 |
 | `report` | 讀取已存的掃描（預設最新一次） | 否 |
-| `vulns` | 依優先度列出漏洞；可用 `--priority`、`--kev`、`--fixable`、`--package` 篩選 | 否 |
-| `diff` | 退步、修復、套件異動、新增或已修補的漏洞 | 否 |
-| `history` | 分數走勢；`--check ID` 顯示單一檢查的時間軸 | 否 |
+| `vulns` | 依優先度列出漏洞；可用 `--priority`、`--kev`、`--fixable`、`--running`、`--package` 篩選 | 否 |
+| `diff` | 退步、修復、證據變化（drifted）、套件異動、新增或已修補的漏洞 | 否 |
+| `history` | 分數走勢（可加 `--profile`）；`--check ID` 顯示單一檢查的時間軸 | 否 |
 | `explain <ID>` | 檢查的原因與修法，或漏洞詳情（KEV、EPSS、修補版本、首次出現時間） | 漏洞不在快取時 |
-| `checks` / `inventory` | 規則目錄 / 已安裝套件 | 否 |
+| `checks` / `inventory` | 規則目錄和 profile / 已安裝套件（加 `--path` 會包含 lockfile 和 Go binary） | 否 |
 | `waive add/rm/list` | 接受風險的例外（`waivers.json`） | 否 |
 | `intel sync` | 更新 KEV，並強制重新查詢 OSV | 是 |
 | `prune` | 清理舊掃描（可加 `--dry-run` 預覽） | 否 |
 | `describe` / `help <cmd>` | 機器可讀的說明；加 `--json` 可取得單一指令的 schema | 否 |
 
 `scan --fail-on` 可以接嚴重度（例如 `high`），也可以接優先度（例如 `P0`）。只要有任何沒被豁免的項目達到門檻，就會 exit 3，可直接當 CI 或變更的關卡。
+
+### 進階功能
+
+- **執行期可達性**（Linux）：讀 `/proc/*/maps`，並從套件管理員的檔案清單反查，判斷有漏洞的程式碼是否正被執行中的 process 載入。結果放在漏洞的 `in_use` 和 `processes` 欄位。high 以上、有修補、而且正在執行中的漏洞會升為 P1。
+- **重啟缺口**：SYS-007 檢查執行中的 kernel 是否為已安裝的最新版；SYS-008 列出仍載入已被刪除（已升級）函式庫的 process，等於「修補了但還沒生效」的清單。
+- **證據變化**：`diff.drifted` 列出狀態仍是失敗、但觀察到的內容改變的檢查，例如多開了一個對外 port、多了一個 SUID 檔案。
+- **語言生態系**：`scan --path /srv/app,/opt`（或 `SYSSEC_PATHS`）會掃描 go.mod、package-lock.json、yarn.lock、requirements*.txt、poetry.lock、uv.lock、Pipfile.lock、Cargo.lock、composer.lock、Gemfile.lock，並讀取 Go binary 內嵌的模組清單和 stdlib 版本，全部走同一套 OSV、EPSS、KEV 流程。
+- **Profile**：`--profile cis-l1|cis-l2|<自訂>` 只看某個 profile 的分數、findings 和 `--fail-on` 門檻。profile 是對完整掃描的一種檢視方式，所以歷史上任何一次掃描都能用 profile 重新計分（`history --profile cis-l1`）。對照是依 CIS Level 的設計意圖，不是經認證的 CIS 評估。
 
 ### 輸出格式
 
@@ -75,7 +83,7 @@ make cross      # → dist/ 下 linux/darwin/windows × amd64/arm64
 | 優先度 | 規則 |
 |---|---|
 | **P0** | 在 CISA KEV 清單上（已遭實際利用） |
-| **P1** | EPSS ≥ 0.10（30 天內被利用機率高），或 critical 且已有修補版本 |
+| **P1** | EPSS ≥ 0.10（30 天內被利用機率高），或 critical 且已有修補版本，或 high 以上、有修補且正被執行中的程式載入 |
 | **P2** | high/critical，或 EPSS ≥ 0.01 |
 | **P3** | 其他 |
 
@@ -106,8 +114,9 @@ internal/
   core/                領域模型：Severity、Result、Vuln、Waiver、EPSS、Report；計分與優先度；零依賴
   sysenv/              主機抽象：FS / Runner / Registry / Host（含容器偵測）+ 測試用 fake
   checks/              檢查引擎：Check 介面、Registry、並行 Engine、宣告式 primitive、JSON 規則
-    builtin/           內建 77 條規則（全部平台都會編譯，執行時依 Platforms 和 host-only tag 過濾）
-  inventory/           直接讀取 dpkg/apk/pacman/Cellar/registry 資料庫
+    builtin/           內建 79 條規則（全部平台都會編譯，執行時依 Platforms 和 host-only tag 過濾）
+  inventory/           直接讀取 dpkg/apk/pacman/Cellar/registry 資料庫；lockfile 與 Go binary；檔案 → 套件反查
+  reach/               /proc/*/maps：執行中的程式載入了哪些檔案、哪些 process 仍載入已被替換的函式庫
   intel/               OSV 查詢、CVSS v3、KEV、EPSS、CVE 合併、執行期套件過濾；定義 Cache 介面
   store/               SQLite（migration、歷史、情資快取），實作 intel.Cache
   waiver/              waivers.json 讀寫與套用
@@ -117,7 +126,7 @@ internal/
   cli/                 指令樹、輸出 envelope、錯誤分類、describe
 ```
 
-依賴方向由外往內：`cli → app → {checks, inventory, intel, store, waiver, diff} → sysenv → core`。
+依賴方向由外往內：`cli → app → {checks, inventory, reach, intel, store, waiver, diff} → sysenv → core`。
 
 ### 設計重點
 
@@ -146,9 +155,9 @@ internal/
 | RHEL / Fedora / SUSE、Arch | ✓ | – |
 | macOS（Homebrew）、Windows | ✓ | – |
 
-## 內建檢查（77 條）
+## 內建檢查（79 條）
 
-- **Linux（51）**：SSH、kernel sysctl、網路 sysctl 和對外高風險服務（包含 socket 對應的 process）、關鍵檔案權限、掛載選項、world-writable、可疑 SUID、帳號、MAC LSM、Secure Boot、自動更新、防火牆、容器 runtime socket。
+- **Linux（53）**：SSH、kernel sysctl、網路 sysctl 和對外高風險服務（包含 socket 對應的 process）、關鍵檔案權限、掛載選項、world-writable、可疑 SUID、帳號、MAC LSM、Secure Boot、自動更新、防火牆、容器 runtime socket，以及重啟缺口（kernel、已被替換的函式庫）。
 - **macOS（25）**：FileVault、Gatekeeper、SIP、Application Firewall、自動更新、訪客帳號、Remote Login、自動登入，再加上共用的 SSH 和檔案權限檢查。
 - **Windows（16）**：UAC、防火牆、Defender、WDigest、LSA RunAsPPL、SAM、AutoRun、LLMNR、Windows Update、PowerShell 記錄、SMBv1、RDP NLA。
 
@@ -161,6 +170,7 @@ internal/
 | `SYSSEC_HOME` | 資料目錄 |
 | `SYSSEC_DB` | 資料庫路徑（也可以用 `--db` 指定） |
 | `SYSSEC_RULES_DIR` | 額外的規則目錄 |
+| `SYSSEC_PATHS` | `--path` 的預設值（要掃 lockfile 和 Go binary 的目錄）；保持固定，diff 才乾淨 |
 | `SYSSEC_OUTPUT=json` | 預設輸出 JSON |
 | `SYSSEC_OSV_URL` / `SYSSEC_KEV_URL` / `SYSSEC_EPSS_URL` | 內部鏡像或 proxy |
 | `SYSSEC_INTEL_TTL_HOURS` | OSV 查詢結果的快取時間，預設 6 |
