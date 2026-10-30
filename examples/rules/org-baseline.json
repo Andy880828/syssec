@@ -1,0 +1,92 @@
+{
+  "rules": [
+    {
+      "id": "ORG-001",
+      "title": "kexec loading is disabled",
+      "severity": "medium",
+      "category": "kernel",
+      "type": "sysctl",
+      "key": "kernel.kexec_load_disabled",
+      "expect": {
+        "op": "eq",
+        "values": [
+          "1"
+        ]
+      },
+      "tags": [
+        "host-only"
+      ]
+    },
+    {
+      "id": "ORG-002",
+      "title": "SSH only allows members of the ssh-users group",
+      "severity": "medium",
+      "category": "ssh",
+      "type": "sshd",
+      "key": "AllowGroups",
+      "expect": {
+        "op": "regex",
+        "values": [
+          "\\bssh-users\\b"
+        ]
+      },
+      "remediation": "Add `AllowGroups ssh-users` to sshd_config and reload sshd."
+    },
+    {
+      "id": "ORG-003",
+      "title": "Login banner warns unauthorized users",
+      "severity": "low",
+      "category": "compliance",
+      "platforms": [
+        "linux"
+      ],
+      "type": "file_regex",
+      "path": "/etc/issue.net",
+      "pattern": "(?i)authorized",
+      "present": true,
+      "missing": "warn"
+    },
+    {
+      "id": "ORG-004",
+      "title": "/etc/cron.d is not group/world writable",
+      "severity": "medium",
+      "category": "filesystem",
+      "type": "file_mode",
+      "path": "/etc/cron.d",
+      "mode": "0755"
+    },
+    {
+      "id": "ORG-005",
+      "title": "Windows: SMB signing is required",
+      "severity": "high",
+      "category": "network",
+      "type": "registry",
+      "path": "HKLM\\SYSTEM\\CurrentControlSet\\Services\\LanmanServer\\Parameters",
+      "name": "RequireSecuritySignature",
+      "expect": {
+        "op": "eq",
+        "values": [
+          "1"
+        ]
+      },
+      "missing": "fail"
+    },
+    {
+      "id": "ORG-006",
+      "title": "macOS: screen locks require a password immediately",
+      "severity": "medium",
+      "category": "system",
+      "platforms": [
+        "darwin"
+      ],
+      "type": "command",
+      "command": [
+        "sysadminctl",
+        "-screenLock",
+        "status"
+      ],
+      "pattern": "(?i)screenLock delay is immediate",
+      "present": true
+    }
+  ]
+}
