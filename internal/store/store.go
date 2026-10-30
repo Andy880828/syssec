@@ -76,6 +76,7 @@ var migrations = []string{
 	ALTER TABLE vulns ADD COLUMN processes TEXT NOT NULL DEFAULT '';
 	ALTER TABLE vulns ADD COLUMN path TEXT NOT NULL DEFAULT '';
 	ALTER TABLE packages ADD COLUMN path TEXT NOT NULL DEFAULT '';`,
+	`ALTER TABLE scans ADD COLUMN paths TEXT NOT NULL DEFAULT '[]';`,
 }
 
 // Open opens (creating if needed) the database and applies migrations.
@@ -166,10 +167,10 @@ func (s *Store) SaveReport(ctx context.Context, r *core.Report) (int64, error) {
 	}
 	defer tx.Rollback()
 	res, err := tx.ExecContext(ctx, `INSERT INTO scans
-		(started_at, duration_ms, hostname, host_json, score, grade, summary_json, inventory_scanned, vuln_scanned, partial, errors_json)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+		(started_at, duration_ms, hostname, host_json, score, grade, summary_json, inventory_scanned, vuln_scanned, partial, errors_json, paths)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
 		ts(r.StartedAt), r.DurationMS, r.Host.Hostname, mustJSON(r.Host), r.Summary.Score, r.Summary.Grade,
-		mustJSON(r.Summary), b2i(r.InventoryScanned), b2i(r.VulnScanned), b2i(r.Partial), mustJSON(r.Errors))
+		mustJSON(r.Summary), b2i(r.InventoryScanned), b2i(r.VulnScanned), b2i(r.Partial), mustJSON(r.Errors), mustJSON(r.Paths))
 	if err != nil {
 		return 0, err
 	}
@@ -289,9 +290,9 @@ func (s *Store) PreviousID(ctx context.Context, id int64) (int64, error) {
 // LoadReport reconstructs a stored report.
 func (s *Store) LoadReport(ctx context.Context, id int64) (*core.Report, error) {
 	r := &core.Report{ID: id}
-	var at, host, sum, errs string
-	err := s.db.QueryRowContext(ctx, `SELECT started_at, duration_ms, host_json, summary_json, inventory_scanned, vuln_scanned, partial, errors_json
-		FROM scans WHERE id = ?`, id).Scan(&at, &r.DurationMS, &host, &sum, &r.InventoryScanned, &r.VulnScanned, &r.Partial, &errs)
+	var at, host, sum, errs, paths string
+	err := s.db.QueryRowContext(ctx, `SELECT started_at, duration_ms, host_json, summary_json, inventory_scanned, vuln_scanned, partial, errors_json, paths
+		FROM scans WHERE id = ?`, id).Scan(&at, &r.DurationMS, &host, &sum, &r.InventoryScanned, &r.VulnScanned, &r.Partial, &errs, &paths)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fmt.Errorf("scan #%d not found", id)
 	} else if err != nil {
@@ -301,6 +302,7 @@ func (s *Store) LoadReport(ctx context.Context, id int64) (*core.Report, error) 
 	_ = json.Unmarshal([]byte(host), &r.Host)
 	_ = json.Unmarshal([]byte(sum), &r.Summary)
 	_ = json.Unmarshal([]byte(errs), &r.Errors)
+	_ = json.Unmarshal([]byte(paths), &r.Paths)
 
 	if err := each(ctx, s.db, `SELECT check_id, title, category, severity, status, evidence, remediation, waiver FROM results WHERE scan_id = ?`, id,
 		func(sc func(...any) error) error {

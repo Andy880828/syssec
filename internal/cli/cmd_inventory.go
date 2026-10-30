@@ -14,15 +14,24 @@ import (
 func inventoryCmd() *Command {
 	return &Command{
 		Name:     "inventory",
-		Summary:  "list installed packages (dpkg, rpm, apk, pacman, Homebrew, Windows)",
+		Summary:  "list installed packages (OS package managers; with --path also lockfiles and Go binaries)",
 		Examples: []string{"syssec inventory --json --limit 0", "syssec inventory --filter openssl --json"},
 		Setup: func(fs *flag.FlagSet) Handler {
 			filter := fs.String("filter", "", "case-insensitive substring match on name")
 			manager := fs.String("manager", "", "only this package manager")
 			limit := fs.Int("limit", 100, "max packages listed (0 = all)")
+			paths := fs.String("path", "", "comma-separated dirs to scan for lockfiles and Go binaries (default $SYSSEC_PATHS)")
 			return func(ctx context.Context, rt *Runtime, _ []string) (*Output, error) {
 				a := rt.App(ctx)
 				pkgs, errs := inventory.Collect(ctx, a.Env)
+				roots := csv(*paths)
+				if len(roots) == 0 {
+					roots = a.Cfg.Paths
+				}
+				if len(roots) > 0 {
+					lang, langErrs := inventory.CollectPaths(ctx, a.Env, roots)
+					pkgs, errs = append(pkgs, lang...), append(errs, langErrs...)
+				}
 				byMgr := map[string]int{}
 				matchable := 0
 				var shown []core.Package
@@ -58,7 +67,7 @@ func inventoryCmd() *Command {
 				return &Output{Data: data, Warnings: warnings, Human: func(w io.Writer) {
 					t := table(w)
 					for _, p := range shown {
-						fmt.Fprintf(t, "%s\t%s\t%s\t%s\n", p.Manager, p.Name, p.Version, p.Arch)
+						fmt.Fprintf(t, "%s\t%s\t%s\t%s\t%s\n", p.Manager, p.Name, p.Version, p.Arch, p.Path)
 					}
 					t.Flush()
 					fmt.Fprintf(w, "\n%d packages total (%d matchable against OSV)", len(pkgs), matchable)

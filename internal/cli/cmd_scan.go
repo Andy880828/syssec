@@ -58,12 +58,14 @@ func scanCmd() *Command {
 			"syssec scan --category ssh,network --json   # partial: not saved",
 			"syssec scan --vulns --fail-on P0 --json     # exit 3 on actively exploited vulns",
 			"syssec scan --fail-on high --json           # exit 3 on high+ failed checks or vulns",
+			"syssec scan --vulns --path /srv/app,/opt --json  # also lockfiles and Go binaries",
 		},
 		Setup: func(fs *flag.FlagSet) Handler {
 			category := fs.String("category", "", "comma-separated categories (partial scan, not saved)")
 			ids := fs.String("check", "", "comma-separated check IDs (partial scan, not saved)")
 			vulns := fs.Bool("vulns", false, "match packages against OSV, enrich with KEV + EPSS (network on cache miss)")
 			refresh := fs.Bool("refresh", false, "with --vulns: bypass the intel cache TTL")
+			paths := fs.String("path", "", "comma-separated dirs to scan for lockfiles and Go binaries (default $SYSSEC_PATHS)")
 			noSave := fs.Bool("no-save", false, "do not write to history")
 			all := fs.Bool("all", false, "list passed, skipped and waived checks too")
 			failOn := fs.String("fail-on", "", "exit 3 if a non-waived item reaches: severity (low..critical) or vuln priority (P0..P3)")
@@ -72,7 +74,13 @@ func scanCmd() *Command {
 				if err != nil {
 					return nil, err
 				}
-				res, err := rt.App(ctx).Scan(ctx, app.ScanOptions{
+				a := rt.App(ctx)
+				roots := csv(*paths)
+				if len(roots) == 0 {
+					roots = a.Cfg.Paths
+				}
+				res, err := a.Scan(ctx, app.ScanOptions{
+					Paths:   roots,
 					Filter:  checks.Filter{IDs: csv(*ids), Categories: csv(*category)},
 					Vulns:   *vulns,
 					Save:    !*noSave,

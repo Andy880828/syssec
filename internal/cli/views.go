@@ -122,6 +122,7 @@ type diffView struct {
 	To              diff.Ref             `json:"to"`
 	ScoreDelta      int                  `json:"score_delta"`
 	Regression      bool                 `json:"regression"`
+	Notes           []string             `json:"notes,omitempty"`
 	Regressed       []diff.CheckChange   `json:"regressed"`
 	Resolved        []diff.CheckChange   `json:"resolved"`
 	Changed         []diff.CheckChange   `json:"changed,omitempty"`
@@ -139,7 +140,7 @@ func newDiffView(d *diff.Diff, limit int) *diffView {
 	if d == nil {
 		return nil
 	}
-	v := &diffView{From: d.From, To: d.To, ScoreDelta: d.ScoreDelta, Regression: d.HasRegression(),
+	v := &diffView{From: d.From, To: d.To, ScoreDelta: d.ScoreDelta, Regression: d.HasRegression(), Notes: d.Notes,
 		Regressed: d.Regressed, Resolved: d.Resolved, Changed: d.Changed, Drifted: d.Drifted, Counts: map[string]int{
 			"regressed": len(d.Regressed), "resolved": len(d.Resolved), "drifted": len(d.Drifted),
 		}}
@@ -264,6 +265,9 @@ func renderDiff(w io.Writer, d *diffView) {
 			}
 			fmt.Fprintf(w, "  [%s] %s %s (%s → %s)\n", c.Severity, c.ID, c.Title, from, c.To)
 		}
+	}
+	for _, n := range d.Notes {
+		fmt.Fprintln(w, "note: "+n)
 	}
 	section("Regressed", d.Regressed)
 	section("Resolved", d.Resolved)

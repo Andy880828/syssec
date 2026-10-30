@@ -3,6 +3,7 @@
 package diff
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -46,6 +47,7 @@ type Diff struct {
 	Resolved   []CheckChange `json:"resolved"`          // became pass
 	Changed    []CheckChange `json:"changed,omitempty"` // other transitions (e.g. -> skip/error)
 	Drifted    []CheckChange `json:"drifted,omitempty"` // still failing, but what is observed changed
+	Notes      []string      `json:"notes,omitempty"`   // caveats about comparability
 	Packages   *PackageDelta `json:"packages,omitempty"`
 	Vulns      *VulnDelta    `json:"vulns,omitempty"`
 }
@@ -121,6 +123,9 @@ func Compute(from, to *core.Report) *Diff {
 			}
 			return strings.Compare(a.ID, b.ID)
 		})
+	}
+	if !slices.Equal(from.Paths, to.Paths) {
+		d.Notes = append(d.Notes, fmt.Sprintf("scanned paths differ (%v vs %v): language package and vuln changes partly reflect that", from.Paths, to.Paths))
 	}
 	if from.InventoryScanned && to.InventoryScanned {
 		d.Packages = packages(from.Packages, to.Packages)

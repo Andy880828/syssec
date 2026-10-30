@@ -16,6 +16,7 @@ type Config struct {
 	DBPath      string        `json:"db_path"`
 	RulesDirs   []string      `json:"rules_dirs"`
 	WaiversPath string        `json:"waivers_path"`
+	Paths       []string      `json:"paths,omitempty"` // default --path roots for language packages
 	OSVURL      string        `json:"osv_url,omitempty"`
 	KEVURL      string        `json:"kev_url,omitempty"`
 	EPSSURL     string        `json:"epss_url,omitempty"`
@@ -38,6 +39,7 @@ func Load() Config {
 		DBPath:      env("SYSSEC_DB", filepath.Join(home, "syssec.db")),
 		RulesDirs:   append([]string{filepath.Join(home, "rules")}, filepath.SplitList(os.Getenv("SYSSEC_RULES_DIR"))...),
 		WaiversPath: filepath.Join(home, "waivers.json"),
+		Paths:       filepath.SplitList(os.Getenv("SYSSEC_PATHS")),
 		OSVURL:      os.Getenv("SYSSEC_OSV_URL"),
 		KEVURL:      os.Getenv("SYSSEC_KEV_URL"),
 		EPSSURL:     os.Getenv("SYSSEC_EPSS_URL"),

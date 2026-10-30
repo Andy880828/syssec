@@ -69,6 +69,7 @@ func describeCmd() *Command {
 						"SYSSEC_RULES_DIR":       "extra JSON rule directories (path-list)",
 						"SYSSEC_OSV_URL":         "OSV API base URL (mirror/proxy)",
 						"SYSSEC_HTTP_TIMEOUT":    "HTTP timeout in seconds",
+						"SYSSEC_PATHS":           "default --path roots (path-list) for lockfiles and Go binaries; keep stable for clean diffs",
 						"SYSSEC_INTEL_TTL_HOURS": "reuse OSV answers for unchanged package versions (default 6)",
 						"SYSSEC_KEV_URL":         "CISA KEV feed URL (mirror)",
 						"SYSSEC_EPSS_URL":        "FIRST EPSS API URL (mirror)",

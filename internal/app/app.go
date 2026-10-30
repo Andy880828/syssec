@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/Andy880828/syssec/internal/checks"
@@ -101,7 +102,8 @@ type ScanOptions struct {
 	Filter  checks.Filter
 	Vulns   bool
 	Save    bool
-	Refresh bool // ignore the intel query cache TTL
+	Refresh bool     // ignore the intel query cache TTL
+	Paths   []string // directories to scan for lockfiles and Go binaries
 }
 
 // ScanOutcome is the result of the Scan use case.
@@ -130,6 +132,11 @@ func (a *App) Scan(ctx context.Context, opt ScanOptions) (*ScanOutcome, error) {
 		InventoryScanned: true,
 	}
 	pkgs, errs := inventory.Collect(ctx, a.Env)
+	if len(opt.Paths) > 0 {
+		lang, langErrs := inventory.CollectPaths(ctx, a.Env, opt.Paths)
+		pkgs, errs = append(pkgs, lang...), append(errs, langErrs...)
+		r.Paths = slices.Sorted(slices.Values(opt.Paths))
+	}
 	r.Packages = pkgs
 	for _, e := range errs {
 		r.Errors = append(r.Errors, e.Error())

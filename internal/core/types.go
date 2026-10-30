@@ -369,6 +369,7 @@ type Report struct {
 	InventoryScanned bool      `json:"inventory_scanned"`
 	VulnScanned      bool      `json:"vuln_scanned"`
 	Partial          bool      `json:"partial,omitempty"` // only a subset of checks ran
+	Paths            []string  `json:"paths,omitempty"`   // directories scanned for lockfiles/binaries
 	Errors           []string  `json:"errors,omitempty"`
 }
 

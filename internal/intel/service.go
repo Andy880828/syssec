@@ -109,6 +109,7 @@ func (s *Service) Match(ctx context.Context, pkgs []core.Package) ([]core.Vuln, 
 	type key struct{ eco, name, ver string }
 	var queries []Query
 	seen := map[key]bool{}
+	paths := map[key][]string{} // lockfiles/binaries a language package came from
 	for _, p := range pkgs {
 		if p.Ecosystem == "" {
 			st.Unmatchable++
@@ -120,6 +121,9 @@ func (s *Service) Match(ctx context.Context, pkgs []core.Package) ([]core.Vuln, 
 		}
 		name, ver := p.Query()
 		k := key{p.Ecosystem, name, ver}
+		if p.Path != "" && !slices.Contains(paths[k], p.Path) {
+			paths[k] = append(paths[k], p.Path)
+		}
 		if !seen[k] {
 			seen[k] = true
 			queries = append(queries, Query{Name: name, Ecosystem: p.Ecosystem, Version: ver})
@@ -163,6 +167,7 @@ func (s *Service) Match(ctx context.Context, pkgs []core.Package) ([]core.Vuln, 
 				ID: a.raw.ID, Package: q.Name, Version: q.Version, Ecosystem: q.Ecosystem,
 				Severity: a.severity, CVSS: a.cvss, FixedIn: fixedVersion(a.raw, q.Name, q.Ecosystem),
 				Summary: summarize(a.raw), Aliases: cveAliases(a.raw),
+				Path: joinPaths(paths[key{q.Ecosystem, q.Name, q.Version}]),
 			}
 			for _, id := range append([]string{v.ID}, v.Aliases...) {
 				v.KEV = v.KEV || kev[id]
@@ -182,6 +187,15 @@ func (s *Service) Match(ctx context.Context, pkgs []core.Package) ([]core.Vuln, 
 	return out, st, nil
 }
 
+// joinPaths renders where a language package was found, capped at three.
+func joinPaths(ps []string) string {
+	slices.Sort(ps)
+	if len(ps) > 3 {
+		return strings.Join(ps[:3], ",") + fmt.Sprintf(",+%d more", len(ps)-3)
+	}
+	return strings.Join(ps, ",")
+}
+
 // mergeByCVE collapses advisories that describe the same CVE on the same
 // package (e.g. USN-8956-1 and UBUNTU-CVE-2026-111497) into one finding
 // keyed by the CVE, keeping the other advisory IDs as aliases.
@@ -191,7 +205,7 @@ func mergeByCVE(in []core.Vuln) []core.Vuln {
 	for _, v := range in {
 		at := -1
 		for _, c := range v.Aliases {
-			if i, ok := index[v.Package+"|"+c]; ok {
+			if i, ok := index[v.Package+v.Path+"|"+c]; ok {
 				at = i
 				break
 			}
@@ -222,9 +236,9 @@ func mergeByCVE(in []core.Vuln) []core.Vuln {
 			}
 		}
 		for _, c := range out[at].Aliases {
-			index[v.Package+"|"+c] = at
+			index[v.Package+v.Path+"|"+c] = at
 		}
-		index[v.Package+"|"+out[at].ID] = at
+		index[v.Package+v.Path+"|"+out[at].ID] = at
 	}
 	for i := range out { // the ID is never repeated in its own alias list
 		out[i].Aliases = slices.DeleteFunc(out[i].Aliases, func(a string) bool { return a == out[i].ID })
