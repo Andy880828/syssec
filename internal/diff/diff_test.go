@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -80,5 +81,26 @@ func TestComputeNotesLostVisibility(t *testing.T) {
 	}
 	if d := Compute(a, a); len(d.Notes) != 0 {
 		t.Errorf("unchanged scan produced notes: %v", d.Notes)
+	}
+}
+
+// 舊掃描（彙總公告未拆列，兄弟 CVE 混在 aliases）對新掃描：不能冒出大量 new/fixed。
+func TestVulnDiffAgainstPreSplitScan(t *testing.T) {
+	old := &core.Report{VulnScanned: true, Vulns: []core.Vuln{
+		{ID: "CVE-2025-39946", Package: "linux-hwe-6.14", KEV: true, Aliases: []string{"CVE-2025-39964", "CVE-2025-39993", "USN-7921-1"}},
+	}}
+	cur := &core.Report{VulnScanned: true, Vulns: []core.Vuln{
+		{ID: "CVE-2025-39946", Package: "linux-hwe-6.14", Aliases: []string{"USN-7921-1"}},
+		{ID: "CVE-2025-39964", Package: "linux-hwe-6.14", KEV: true, Aliases: []string{"USN-7921-1"}},
+		{ID: "CVE-2025-39993", Package: "linux-hwe-6.14", Aliases: []string{"USN-7921-1"}},
+	}}
+	if d := Compute(old, cur).Vulns; len(d.New)+len(d.Fixed) != 0 {
+		t.Errorf("splitting a rollup is not churn: new=%v fixed=%v", d.New, d.Fixed)
+	}
+	// 拆列之後，兩列只共用公告 ID 時不能互相掩護：新的 CVE 仍要報成 new。
+	later := &core.Report{VulnScanned: true, Vulns: append(slices.Clone(cur.Vulns),
+		core.Vuln{ID: "CVE-2026-0001", Package: "linux-hwe-6.14", Aliases: []string{"USN-7921-1"}})}
+	if d := Compute(cur, later).Vulns; len(d.New) != 1 || d.New[0].ID != "CVE-2026-0001" || len(d.Fixed) != 0 {
+		t.Errorf("a new CVE sharing the notice ID must still be new: new=%v fixed=%v", d.New, d.Fixed)
 	}
 }

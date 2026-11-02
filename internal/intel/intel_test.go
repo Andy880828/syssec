@@ -5,12 +5,15 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/Andy880828/syssec/internal/core"
+	"github.com/Andy880828/syssec/internal/waiver"
 )
 
 func TestCVSS3Base(t *testing.T) {
@@ -70,8 +73,17 @@ func (m *memCache) ReplaceKEV(_ context.Context, es []core.KEVEntry) error {
 	}
 	return nil
 }
-func (m *memCache) Meta(_ context.Context, k string) (string, error) { return m.meta[k], nil }
-func (m *memCache) SetMeta(_ context.Context, k, v string) error     { m.meta[k] = v; return nil }
+func (m *memCache) Meta(_ context.Context, k string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.meta[k], nil
+}
+func (m *memCache) SetMeta(_ context.Context, k, v string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.meta[k] = v
+	return nil
+}
 
 func (m *memCache) GetQuery(_ context.Context, k string) ([]byte, time.Time, bool, error) {
 	m.mu.Lock()
@@ -248,5 +260,194 @@ func TestFixedVersionPicksInstalledBranch(t *testing.T) {
 	}
 	if got := fixedVersion(v, "other", "Go", "1.0"); got != "" {
 		t.Errorf("unrelated package: %q", got)
+	}
+}
+
+// 回歸測試：一份公告修補多個 CVE 時，KEV 只能標在真正列入 KEV 的 CVE 上。
+func TestRollupAdvisoryKEVAttribution(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/querybatch":
+			json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{
+				{"vulns": []VulnRef{{ID: "USN-9", Modified: "x"}}},
+			}})
+		case "/v1/vulns/USN-9":
+			w.Write([]byte(`{"id":"USN-9","modified":"x","summary":"kernel rollup",
+				"upstream":["CVE-2099-1000","CVE-2099-2000","UBUNTU-CVE-2099-1000","UBUNTU-CVE-2099-2000"],
+				"related":["UBUNTU-CVE-2099-1000","UBUNTU-CVE-2099-2000"],
+				"affected":[{"package":{"name":"linux-hwe-6.17","ecosystem":"Ubuntu:24.04:LTS"},
+				  "ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"6.17.0-35"}]}]}]}`))
+		case "/epss":
+			w.Write([]byte(`{"data":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	cache := newMemCache()
+	cache.kev["CVE-2099-2000"] = true // 只有第二個 CVE 在 KEV
+	svc := &Service{OSV: &OSVClient{BaseURL: srv.URL, HTTP: srv.Client()}, HTTP: srv.Client(), Cache: cache, Concurrency: 2, EPSSURL: srv.URL + "/epss"}
+	vulns, _, err := svc.Match(context.Background(), []core.Package{{
+		Name: "linux-modules-6.17.0-14-generic", Version: "6.17.0-14", Manager: "dpkg",
+		Ecosystem: "Ubuntu:24.04:LTS", SourceName: "linux-hwe-6.17",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]core.Vuln{}
+	for _, v := range vulns {
+		t.Logf("row id=%s kev=%v priority=%s aliases=%v fixed=%s", v.ID, v.KEV, v.Priority, v.Aliases, v.FixedIn)
+		got[v.ID] = v
+	}
+	if a, ok := got["CVE-2099-1000"]; !ok {
+		t.Error("CVE-2099-1000 應有自己的一列")
+	} else if a.KEV {
+		t.Error("CVE-2099-1000 不在 KEV，卻被標成 KEV")
+	}
+	if k, ok := got["CVE-2099-2000"]; !ok {
+		t.Error("CVE-2099-2000 被併進別列，失去自己的一列")
+	} else if !k.KEV || k.Priority != "P0" {
+		t.Errorf("CVE-2099-2000 應為 KEV/P0，實際 %+v", k)
+	}
+}
+
+// 有逐 CVE 紀錄（UBUNTU-CVE-*）時，彙總公告只替這些 CVE 補別名與修補版，
+// 不替沒有逐 CVE 紀錄的 CVE 開列；彙總公告的評級也不套到任何 CVE。
+func TestRollupAnnotatesPerCVERecordsAndLendsNoRating(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/querybatch":
+			json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{
+				{"vulns": []VulnRef{{ID: "USN-9", Modified: "x"}, {ID: "UBUNTU-CVE-2099-1000", Modified: "x"}}},
+			}})
+		case "/v1/vulns/USN-9": // 公告本身評為 critical：不能借給 CVE
+			w.Write([]byte(`{"id":"USN-9","modified":"x","summary":"kernel rollup",
+				"severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"}],
+				"upstream":["CVE-2099-1000","CVE-2099-2000"],
+				"affected":[{"package":{"name":"linux","ecosystem":"Ubuntu:24.04:LTS"},"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"6.8.0-90"}]}]}]}`))
+		case "/v1/vulns/UBUNTU-CVE-2099-1000":
+			w.Write([]byte(`{"id":"UBUNTU-CVE-2099-1000","modified":"x","summary":"use-after-free in netfilter allows local escalation",
+				"upstream":["CVE-2099-1000"],"severity":[{"type":"Ubuntu","score":"medium"}],
+				"affected":[{"package":{"name":"linux","ecosystem":"Ubuntu:24.04:LTS"},"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"}]}]}]}`))
+		case "/epss":
+			w.Write([]byte(`{"data":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	cache := newMemCache()
+	cache.kev["CVE-2099-2000"] = true
+	svc := &Service{OSV: &OSVClient{BaseURL: srv.URL, HTTP: srv.Client()}, HTTP: srv.Client(), Cache: cache, Concurrency: 2, EPSSURL: srv.URL + "/epss"}
+	vulns, st, err := svc.Match(context.Background(), []core.Package{{Name: "linux-image-6.8.0-80-generic", Version: "6.8.0-80", Manager: "dpkg", Ecosystem: "Ubuntu:24.04:LTS", SourceName: "linux"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(vulns) != 1 {
+		t.Fatalf("only CVE-2099-1000 has a per-CVE record for this package; got %+v", vulns)
+	}
+	v := vulns[0]
+	if v.ID != "CVE-2099-1000" || v.KEV || v.Severity != core.SeverityMedium || v.CVSS != 0 {
+		t.Errorf("rating must come from the per-CVE record, not the critical notice: %+v", v)
+	}
+	if v.FixedIn != "6.8.0-90" || !slices.Equal(v.Aliases, []string{"UBUNTU-CVE-2099-1000", "USN-9"}) {
+		t.Errorf("notice should annotate the row: fixed=%q aliases=%v", v.FixedIn, v.Aliases)
+	}
+	if !strings.Contains(v.Summary, "netfilter") {
+		t.Errorf("per-CVE summary beats the notice title: %q", v.Summary)
+	}
+	if st.Rollups != 1 {
+		t.Errorf("rollups stat: %+v", st)
+	}
+}
+
+// 彙總公告展開的 CVE 若沒有逐 CVE 紀錄，就查 CVE 本身的紀錄評級；查不到維持 unknown。
+func TestRollupCVEsRatedFromTheirOwnRecords(t *testing.T) {
+	var cveFetches atomic.Int64 // handlers run concurrently
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/querybatch":
+			json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"vulns": []VulnRef{{ID: "DSA-7", Modified: "x"}}}}})
+		case "/v1/vulns/DSA-7":
+			w.Write([]byte(`{"id":"DSA-7","modified":"x","summary":"openssl security update","upstream":["CVE-2099-0001","CVE-2099-0002"],
+				"severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H"}],
+				"affected":[{"package":{"name":"openssl","ecosystem":"Debian:12"},"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"3.0.15-1"}]}]}]}`))
+		case "/v1/vulns/CVE-2099-0001":
+			cveFetches.Add(1)
+			w.Write([]byte(`{"id":"CVE-2099-0001","modified":"x","severity":[{"type":"CVSS_V3","score":"CVSS:3.1/AV:L/AC:L/PR:L/UI:N/S:U/C:H/I:N/A:N"}]}`))
+		case "/epss":
+			w.Write([]byte(`{"data":[]}`))
+		default:
+			cveFetches.Add(1)
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	svc := &Service{OSV: &OSVClient{BaseURL: srv.URL, HTTP: srv.Client()}, HTTP: srv.Client(), Cache: newMemCache(), Concurrency: 2, EPSSURL: srv.URL + "/epss"}
+	vulns, st, err := svc.Match(context.Background(), []core.Package{{Name: "openssl", Version: "3.0.11-1", Manager: "dpkg", Ecosystem: "Debian:12"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]core.Vuln{}
+	for _, v := range vulns {
+		got[v.ID] = v
+	}
+	if a := got["CVE-2099-0001"]; a.CVSS != 5.5 || a.Severity != core.SeverityMedium {
+		t.Errorf("CVE-2099-0001 should be rated from its own record (5.5), not the notice (10.0): %+v", a)
+	}
+	if b := got["CVE-2099-0002"]; b.Severity != core.SeverityUnknown || b.CVSS != 0 {
+		t.Errorf("CVE-2099-0002 has no record: stays unknown instead of inheriting 10.0: %+v", b)
+	}
+	// 每個 CVE 先查 DEBIAN-CVE-*（此處不存在），再查 CVE 紀錄：共 4 次請求，404 也算。
+	if st.SeverityLookups != 4 || st.SeverityFetched != 4 || cveFetches.Load() != 4 {
+		t.Errorf("rating lookups: stats %+v, requests %d", st, cveFetches.Load())
+	}
+	// 第二次掃描：評級來自快取，404 有負快取，不再發任何評級請求。
+	if _, st2, err := svc.Match(context.Background(), []core.Package{{Name: "openssl", Version: "3.0.11-1", Manager: "dpkg", Ecosystem: "Debian:12"}}); err != nil || st2.SeverityFetched != 0 || cveFetches.Load() != 4 {
+		t.Errorf("second scan re-requested rating records: stats %+v, requests %d, err %v", st2, cveFetches.Load(), err)
+	}
+}
+
+func TestPickFixedIsOrderIndependent(t *testing.T) {
+	for _, order := range [][]string{{"6.17.0-35", "6.17.0-30", ""}, {"", "6.17.0-30", "6.17.0-35"}} {
+		if got := pickFixed(order, "6.17.0-14"); got != "6.17.0-30" {
+			t.Errorf("%v: %q", order, got)
+		}
+	}
+	if got := pickFixed([]string{"1.2", "1.2"}, "1.0"); got != "1.2" {
+		t.Errorf("duplicates: %q", got)
+	}
+}
+
+// 端到端：Match 拆出的列交給 waiver.Apply，豁免 CVE-A 不可波及同公告的 KEV CVE-B。
+// 舊實作把兄弟 CVE 放進 aliases，這裡的豁免會連帶蓋掉 KEV 那一筆。
+func TestWaiverOnRollupRowsStaysOnOneCVE(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/querybatch":
+			json.NewEncoder(w).Encode(map[string]any{"results": []map[string]any{{"vulns": []VulnRef{{ID: "USN-9", Modified: "x"}}}}})
+		case "/v1/vulns/USN-9":
+			w.Write([]byte(`{"id":"USN-9","modified":"x","upstream":["CVE-2099-1000","CVE-2099-2000"],
+				"affected":[{"package":{"name":"linux-hwe-6.17","ecosystem":"Ubuntu:24.04:LTS"},"ranges":[{"type":"ECOSYSTEM","events":[{"introduced":"0"},{"fixed":"6.17.0-35"}]}]}]}`))
+		case "/epss":
+			w.Write([]byte(`{"data":[]}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	cache := newMemCache()
+	cache.kev["CVE-2099-2000"] = true
+	svc := &Service{OSV: &OSVClient{BaseURL: srv.URL, HTTP: srv.Client()}, HTTP: srv.Client(), Cache: cache, Concurrency: 2, EPSSURL: srv.URL + "/epss"}
+	vulns, _, err := svc.Match(context.Background(), []core.Package{{Name: "linux-image-6.17.0-14-generic", Version: "6.17.0-14", Manager: "dpkg", Ecosystem: "Ubuntu:24.04:LTS", SourceName: "linux-hwe-6.17"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &waiver.File{Waivers: []core.Waiver{{ID: "CVE-2099-1000", Reason: "not reachable"}}}
+	f.Apply(nil, vulns, time.Now())
+	for _, v := range vulns {
+		if v.KEV && v.Waiver != nil {
+			t.Errorf("waiving CVE-2099-1000 hid the KEV finding %s: %+v", v.ID, v)
+		}
 	}
 }

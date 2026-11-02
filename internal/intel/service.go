@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net/http"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Andy880828/syssec/internal/core"
@@ -72,16 +74,20 @@ func (s *Service) ensureFormat(ctx context.Context) error {
 
 // MatchStats describes the cost of a match run.
 type MatchStats struct {
-	Packages    int      `json:"packages"`
-	Unmatchable int      `json:"unmatchable"` // no OSV ecosystem for this manager/distro
-	Queries     int      `json:"queries"`
-	Excluded    int      `json:"excluded"`       // build-time-only packages (kernel headers, sources)
-	QueryCached int      `json:"queries_cached"` // answered from the local query cache (no network)
-	Advisories  int      `json:"advisories"`
-	CacheHits   int      `json:"cache_hits"`
-	Fetched     int      `json:"fetched"`
-	Merged      int      `json:"merged"` // duplicate advisories folded into one CVE
-	Warnings    []string `json:"warnings,omitempty"`
+	Packages    int `json:"packages"`
+	Unmatchable int `json:"unmatchable"` // no OSV ecosystem for this manager/distro
+	Queries     int `json:"queries"`
+	Excluded    int `json:"excluded"`       // build-time-only packages (kernel headers, sources)
+	QueryCached int `json:"queries_cached"` // answered from the local query cache (no network)
+	Advisories  int `json:"advisories"`
+	CacheHits   int `json:"cache_hits"`
+	Fetched     int `json:"fetched"`
+	Merged      int `json:"merged"`  // rows for the same CVE folded together
+	Rollups     int `json:"rollups"` // advisories covering several CVEs, expanded per CVE
+	// CVE records read to rate unrated findings, and how many needed the network.
+	SeverityLookups int      `json:"severity_lookups"`
+	SeverityFetched int      `json:"severity_fetched"`
+	Warnings        []string `json:"warnings,omitempty"`
 }
 
 // Runtime reports whether a package ships code that runs on this host.
@@ -154,29 +160,24 @@ func (s *Service) Match(ctx context.Context, pkgs []core.Package) ([]core.Vuln, 
 	if err != nil {
 		return nil, st, err
 	}
-	s.backfillSeverity(ctx, advisories)
-
-	var raw []core.Vuln
+	var raw []row
 	for i, q := range queries {
+		var found []*advisory
 		for _, h := range hits[i] {
-			a, ok := advisories[h.ID]
-			if !ok {
-				continue
+			if a, ok := advisories[h.ID]; ok {
+				found = append(found, a)
 			}
-			v := core.Vuln{
-				ID: a.raw.ID, Package: q.Name, Version: q.Version, Ecosystem: q.Ecosystem,
-				Severity: a.severity, CVSS: a.cvss, FixedIn: fixedVersion(a.raw, q.Name, q.Ecosystem, q.Version),
-				Summary: summarize(a.raw), Aliases: cveAliases(a.raw),
-				Path: joinPaths(paths[key{q.Ecosystem, q.Name, q.Version}]),
-			}
-			for _, id := range append([]string{v.ID}, v.Aliases...) {
-				v.KEV = v.KEV || kev[id]
-			}
-			raw = append(raw, v)
 		}
+		rows, rollups := buildRows(found, q, joinPaths(paths[key{q.Ecosystem, q.Name, q.Version}]), kev)
+		raw, st.Rollups = append(raw, rows...), st.Rollups+rollups
 	}
 	out := mergeByCVE(raw)
 	st.Merged = len(raw) - len(out)
+	var unrated int
+	st.SeverityLookups, st.SeverityFetched, unrated = s.backfillSeverity(ctx, out)
+	if unrated > 0 {
+		st.Warnings = append(st.Warnings, fmt.Sprintf("%d findings left unrated: severity lookup budget (%d records) reached; they rate on later scans as records get cached", unrated, maxSeverityLookups))
+	}
 	if err := s.enrichEPSS(ctx, out); err != nil {
 		st.Warnings = append(st.Warnings, "EPSS enrichment skipped: "+err.Error())
 	}
@@ -196,54 +197,123 @@ func joinPaths(ps []string) string {
 	return strings.Join(ps, ",")
 }
 
-// mergeByCVE collapses advisories that describe the same CVE on the same
-// package (e.g. USN-8956-1 and UBUNTU-CVE-2026-111497) into one finding
-// keyed by the CVE, keeping the other advisory IDs as aliases.
-func mergeByCVE(in []core.Vuln) []core.Vuln {
-	var out []core.Vuln
-	index := map[string]int{} // package|CVE -> position in out
-	for _, v := range in {
-		at := -1
-		for _, c := range v.Aliases {
-			if i, ok := index[v.Package+v.Path+"|"+c]; ok {
-				at = i
-				break
-			}
+// row is a finding before merging; rollup marks rows expanded from an
+// advisory that covers several CVEs, whose summary and rating describe the
+// whole notice rather than this CVE.
+type row struct {
+	core.Vuln
+	rollup bool
+}
+
+// buildRows turns the advisories that matched one package version into one
+// row per CVE. This is the single place that applies the rollup rule:
+//
+//   - An advisory covering at most one CVE (GHSA-x = CVE-y, UBUNTU-CVE-y, a
+//     DSA for a single CVE) yields one row keyed by that CVE.
+//   - An advisory covering several CVEs (USN/DSA/RHSA notices) is a rollup:
+//     its CVEs are siblings, not aliases. Each CVE gets its own row carrying
+//     the notice ID as an alias and the notice's fixed version, with KEV
+//     judged on that CVE alone and no rating borrowed from the notice.
+//   - When some of a rollup's CVEs also have their own per-CVE record in
+//     these results, the source publishes per-CVE data for this package:
+//     the rollup only annotates those CVEs, because a notice lists CVEs for
+//     every package it touches and the per-CVE record is authoritative.
+func buildRows(found []*advisory, q Query, path string, kev map[string]bool) ([]row, int) {
+	own := map[string]bool{} // CVEs with their own single-CVE record here
+	for _, a := range found {
+		if c := coveredCVEs(a.raw); len(c) == 1 {
+			own[c[0]] = true
 		}
-		if at < 0 {
-			if len(v.Aliases) > 0 && v.ID != v.Aliases[0] {
-				v.Aliases = append(v.Aliases, v.ID)
-				v.ID = v.Aliases[0]
-			}
-			out = append(out, v)
-			at = len(out) - 1
-		} else {
-			m := &out[at]
-			m.KEV = m.KEV || v.KEV
-			if v.Severity > m.Severity || v.CVSS > m.CVSS {
-				m.Severity, m.CVSS = max(m.Severity, v.Severity), max(m.CVSS, v.CVSS)
-			}
-			if m.FixedIn == "" {
-				m.FixedIn = v.FixedIn
-			}
-			if len(v.Summary) > len(m.Summary) {
-				m.Summary = v.Summary
-			}
-			for _, a := range append([]string{v.ID}, v.Aliases...) {
-				if a != m.ID && !slices.Contains(m.Aliases, a) {
-					m.Aliases = append(m.Aliases, a)
-				}
-			}
-		}
-		for _, c := range out[at].Aliases {
-			index[v.Package+v.Path+"|"+c] = at
-		}
-		index[v.Package+v.Path+"|"+out[at].ID] = at
 	}
-	for i := range out { // the ID is never repeated in its own alias list
-		out[i].Aliases = slices.DeleteFunc(out[i].Aliases, func(a string) bool { return a == out[i].ID })
+	var rows []row
+	rollups := 0
+	for _, a := range found {
+		base := core.Vuln{
+			Package: q.Name, Version: q.Version, Ecosystem: q.Ecosystem, Path: path,
+			FixedIn: fixedVersion(a.raw, q.Name, q.Ecosystem, q.Version), Summary: summarize(a.raw),
+		}
+		cves := coveredCVEs(a.raw)
+		if len(cves) <= 1 {
+			v := base
+			v.ID, v.Severity, v.CVSS = a.raw.ID, a.severity, a.cvss
+			if len(cves) == 1 && cves[0] != a.raw.ID {
+				v.ID, v.Aliases = cves[0], []string{a.raw.ID}
+			}
+			v.KEV = kev[v.ID]
+			rows = append(rows, row{Vuln: v})
+			continue
+		}
+		rollups++
+		annotateOnly := slices.ContainsFunc(cves, func(c string) bool { return own[c] })
+		for _, c := range cves {
+			if annotateOnly && !own[c] {
+				continue
+			}
+			v := base
+			v.ID, v.Aliases, v.Severity, v.KEV = c, []string{a.raw.ID}, core.SeverityUnknown, kev[c]
+			rows = append(rows, row{Vuln: v, rollup: true})
+		}
 	}
-	return out
+	return rows, rollups
+}
+
+// mergeByCVE folds rows for the same CVE on the same package (e.g. DSA-1 and
+// USN-1 both fixing CVE-y) into one finding. Rows merge only on their own
+// ID, never through shared aliases, and every merged field is chosen by an
+// order-independent rule.
+func mergeByCVE(in []row) []core.Vuln {
+	var out []row
+	index := map[string]int{}
+	for _, r := range in {
+		k := r.Package + r.Path + "|" + r.ID
+		i, ok := index[k]
+		if !ok {
+			index[k] = len(out)
+			out = append(out, r)
+			continue
+		}
+		m := &out[i]
+		m.KEV = m.KEV || r.KEV
+		m.Severity, m.CVSS = max(m.Severity, r.Severity), max(m.CVSS, r.CVSS)
+		m.FixedIn = pickFixed([]string{m.FixedIn, r.FixedIn}, m.Version)
+		// Per-CVE text beats a notice's generic title; then longer, then lexical.
+		if (m.rollup && !r.rollup) || (m.rollup == r.rollup &&
+			(len(r.Summary) > len(m.Summary) || (len(r.Summary) == len(m.Summary) && r.Summary < m.Summary))) {
+			m.Summary = r.Summary
+		}
+		m.rollup = m.rollup && r.rollup
+		m.Aliases = append(m.Aliases, r.Aliases...)
+	}
+	res := make([]core.Vuln, len(out))
+	for i, r := range out {
+		v := r.Vuln
+		slices.Sort(v.Aliases)
+		v.Aliases = slices.DeleteFunc(slices.Compact(v.Aliases), func(a string) bool { return a == v.ID })
+		res[i] = v
+	}
+	return res
+}
+
+// pickFixed chooses among fixed versions from several advisories with the
+// same rule as fixedVersion: a single candidate as-is, otherwise the
+// smallest one above the installed version, or "" when none is.
+func pickFixed(candidates []string, installed string) string {
+	var c []string
+	for _, f := range candidates {
+		if f != "" && !slices.Contains(c, f) {
+			c = append(c, f)
+		}
+	}
+	if len(c) <= 1 || installed == "" {
+		return strings.Join(c, "")
+	}
+	best := ""
+	for _, f := range c {
+		if core.CompareVersions(f, installed) > 0 && (best == "" || core.CompareVersions(f, best) < 0) {
+			best = f
+		}
+	}
+	return best
 }
 
 func (q Query) cacheKey() string { return q.Ecosystem + "|" + q.Name + "|" + q.Version }
@@ -398,57 +468,141 @@ func Slim(v OSVVuln) OSVVuln {
 	return v
 }
 
-// backfillSeverity resolves distro advisories (DSA/USN/DEBIAN-CVE...) that
-// carry no rating by looking at their upstream CVE record, which is cached too.
-func (s *Service) backfillSeverity(ctx context.Context, advs map[string]*advisory) {
-	// First borrow ratings from sibling advisories for the same CVE
-	// (e.g. USN-xxxx inherits from UBUNTU-CVE-yyyy) — no network needed.
-	best := map[string]*advisory{}
-	for _, a := range advs {
-		for _, c := range cveAliases(a.raw) {
-			if b := best[c]; b == nil || a.severity > b.severity {
-				best[c] = a
-			}
+// maxSeverityLookups bounds the records read per match to rate findings, so
+// a host with many unrated rollup CVEs cannot turn into unbounded requests.
+// Records are cached, so the cost is paid once per CVE.
+const maxSeverityLookups = 1000
+
+// distroRecordPrefix maps an ecosystem to the prefix of its per-CVE records
+// (UBUNTU-CVE-*, DEBIAN-CVE-*), which rate the CVE for that distro.
+var distroRecordPrefix = map[string]string{"Ubuntu": "UBUNTU-", "Debian": "DEBIAN-"}
+
+// ratingSources lists where a CVE's rating may come from, best first: the
+// distro's per-CVE record, then the CVE record itself.
+func ratingSources(cve, ecosystem string) []string {
+	distro, _, _ := strings.Cut(ecosystem, ":")
+	if p, ok := distroRecordPrefix[distro]; ok {
+		return []string{p + cve, cve}
+	}
+	return []string{cve}
+}
+
+// backfillSeverity rates findings that still have no severity from their
+// per-CVE records (cached like any advisory). A rollup notice is never a
+// rating source: its rating describes the whole notice, not one CVE.
+// Fixable findings go first because severity decides their P1 eligibility.
+// It returns how many records were read, how many network requests that
+// took (404s included) and how many findings were left unrated because the
+// network budget ran out.
+func (s *Service) backfillSeverity(ctx context.Context, vs []core.Vuln) (lookups, fetched, unrated int) {
+	type target struct{ cve, ecosystem string }
+	byTarget := map[target][]int{}
+	fixable := map[target]bool{}
+	for i, v := range vs {
+		if v.Severity == core.SeverityUnknown && strings.HasPrefix(v.ID, "CVE-") {
+			t := target{v.ID, v.Ecosystem}
+			byTarget[t] = append(byTarget[t], i)
+			fixable[t] = fixable[t] || v.FixedIn != ""
 		}
 	}
-	for _, a := range advs {
-		if a.severity != core.SeverityUnknown {
-			continue
-		}
-		for _, c := range cveAliases(a.raw) {
-			if b := best[c]; b != nil && b.severity > a.severity {
-				a.severity, a.cvss = b.severity, b.cvss
+	targets := slices.Collect(maps.Keys(byTarget))
+	slices.SortFunc(targets, func(a, b target) int {
+		if fixable[a] != fixable[b] {
+			if fixable[a] {
+				return -1
 			}
+			return 1
 		}
+		return strings.Compare(a.cve+a.ecosystem, b.cve+b.ecosystem)
+	})
+	var mu sync.Mutex
+	budget := maxSeverityLookups
+	// take accounts for one record read; only network requests (including
+	// 404s) spend the budget, so later scans progress past cached records.
+	take := func(cached bool) bool {
+		mu.Lock()
+		defer mu.Unlock()
+		if !cached {
+			if budget == 0 {
+				return false
+			}
+			budget--
+			fetched++
+		}
+		lookups++
+		return true
+	}
+	var offline atomic.Bool // first network failure stops further requests this run
+	rate := func(t target, a *advisory) bool {
+		if len(coveredCVEs(a.raw)) > 1 || a.severity == core.SeverityUnknown {
+			return false // itself a rollup, or unrated: try the next source
+		}
+		for _, i := range byTarget[t] {
+			vs[i].Severity, vs[i].CVSS = a.severity, a.cvss
+		}
+		return true
 	}
 	sem := make(chan struct{}, max(s.Concurrency, 1))
 	var wg sync.WaitGroup
-	for _, a := range advs {
-		if a.severity != core.SeverityUnknown {
-			continue
-		}
-		var cves []string
-		for _, c := range cveAliases(a.raw) {
-			if c != a.raw.ID {
-				cves = append(cves, c)
-			}
-		}
-		if len(cves) == 0 {
-			continue
-		}
+	for _, t := range targets {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			for _, c := range cves[:min(len(cves), 3)] {
-				if up, _, err := s.load(ctx, c, ""); err == nil && up.severity > a.severity {
-					a.severity, a.cvss = up.severity, up.cvss
+			sources := ratingSources(t.cve, t.ecosystem)
+			var uncached []string
+			for _, id := range sources { // cached sources first: no network at all
+				if _, _, ok, _ := s.Cache.GetVuln(ctx, id); !ok {
+					uncached = append(uncached, id)
+				} else if take(true) {
+					if a, _, err := s.load(ctx, id, ""); err == nil && rate(t, a) {
+						return
+					}
+				}
+			}
+			for _, id := range uncached {
+				if s.knownMissing(ctx, id) {
+					continue
+				}
+				if offline.Load() || !take(false) {
+					mu.Lock()
+					unrated += len(byTarget[t])
+					mu.Unlock()
+					return
+				}
+				a, _, err := s.load(ctx, id, "")
+				switch {
+				case errors.Is(err, ErrNotFound):
+					s.markMissing(ctx, id)
+				case err != nil:
+					offline.Store(true)
+				case rate(t, a):
+					return
 				}
 			}
 		}()
 	}
 	wg.Wait()
+	return lookups, fetched, unrated
+}
+
+// missingTTL is how long a 404 for a per-CVE record is remembered, so
+// records that do not exist (many CVEs have no DEBIAN-/UBUNTU- record) are
+// not re-requested on every scan.
+const missingTTL = 7 * 24 * time.Hour
+
+func (s *Service) knownMissing(ctx context.Context, id string) bool {
+	at, err := s.Cache.Meta(ctx, "osv_missing:"+id)
+	if err != nil || at == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, at)
+	return err == nil && time.Since(t) < missingTTL
+}
+
+func (s *Service) markMissing(ctx context.Context, id string) {
+	_ = s.Cache.SetMeta(ctx, "osv_missing:"+id, time.Now().UTC().Format(time.RFC3339))
 }
 
 // Severity derives a qualitative rating and best CVSS v3 score.
@@ -536,7 +690,11 @@ func summarize(v OSVVuln) string {
 	return s
 }
 
-func cveAliases(v OSVVuln) []string {
+// coveredCVEs lists the CVEs an advisory is about: its own ID, its aliases
+// and the CVEs it fixes (upstream/related). For a single-CVE record these
+// are aliases of one vulnerability; for a rollup notice they are distinct
+// vulnerabilities. buildRows is the one place that tells the two apart.
+func coveredCVEs(v OSVVuln) []string {
 	var out []string
 	for _, a := range slices.Concat([]string{v.ID}, v.Aliases, v.Upstream, v.Related) {
 		if strings.HasPrefix(a, "CVE-") && !slices.Contains(out, a) {
@@ -558,9 +716,13 @@ type Detail struct {
 	Modified   string          `json:"modified,omitempty"`
 	Affected   []AffectedPkg   `json:"affected,omitempty"`
 	References []string        `json:"references,omitempty"`
-	KEV        *core.KEVEntry  `json:"kev,omitempty"`
-	EPSS       *core.EPSSScore `json:"epss,omitempty"`
-	URL        string          `json:"url"`
+	KEV        *core.KEVEntry  `json:"kev,omitempty"`  // single-CVE advisories only
+	EPSS       *core.EPSSScore `json:"epss,omitempty"` // single-CVE advisories only
+	// A rollup notice fixes several CVEs: they are listed here instead of
+	// being folded into KEV/EPSS/severity, which describe one CVE each.
+	CVEs    []string `json:"cves,omitempty"`
+	KEVCVEs []string `json:"kev_cves,omitempty"`
+	URL     string   `json:"url"`
 }
 
 // AffectedPkg summarises one affected package entry.
@@ -590,8 +752,13 @@ func (s *Service) Lookup(ctx context.Context, id string) (*Detail, error) {
 			return nil, err
 		}
 	}
-	s.backfillSeverity(ctx, map[string]*advisory{id: a})
 	v := a.raw
+	cves := coveredCVEs(v)
+	if a.severity == core.SeverityUnknown && len(cves) == 1 && cves[0] != v.ID {
+		if up, _, err := s.load(ctx, cves[0], ""); err == nil && len(coveredCVEs(up.raw)) <= 1 {
+			a.severity, a.cvss = up.severity, up.cvss
+		}
+	}
 	d := &Detail{
 		ID: v.ID, Summary: summarize(v), Severity: a.severity, CVSS: a.cvss,
 		Aliases: v.Aliases, Published: v.Published, Modified: v.Modified,
@@ -621,14 +788,19 @@ func (s *Service) Lookup(ctx context.Context, id string) (*Detail, error) {
 			d.References = append(d.References, r.URL)
 		}
 	}
-	cves := cveAliases(v)
-	for _, cve := range cves {
-		if k, err := s.Cache.KEV(ctx, cve); err == nil && k != nil {
-			d.KEV = k
-			break
+	if len(cves) > 1 {
+		d.CVEs = cves
+		for _, cve := range cves {
+			if k, err := s.Cache.KEV(ctx, cve); err == nil && k != nil {
+				d.KEVCVEs = append(d.KEVCVEs, cve)
+			}
 		}
+		return d, nil
 	}
-	if len(cves) > 0 {
+	if len(cves) == 1 {
+		if k, err := s.Cache.KEV(ctx, cves[0]); err == nil && k != nil {
+			d.KEV = k
+		}
 		if scores, err := s.epss(ctx, cves[:1]); err == nil {
 			if e, ok := scores[cves[0]]; ok {
 				d.EPSS = &e

@@ -25,6 +25,7 @@
 **修正**：
 - `intel.Runtime()` 把只在編譯時用到的套件排除在比對外，包括 kernel headers、kernel source 和文件套件。正在執行的 kernel 仍然透過 `linux-image-*` 比對。
 - `mergeByCVE` 把同一個套件上指向同一個 CVE 的 advisory 合併成一筆，以 CVE 為 ID，其餘 advisory ID 收進 `aliases`。
+  - **v3.1 修正**：第一版把公告「修補了哪些 CVE」誤當成「同一個 CVE 的別名」。一份 USN 修補多個 CVE 時，只要其中一個在 KEV，整列就被標成 KEV，列上卻顯示另一個 CVE，真正的 KEV CVE 被藏進 aliases。現在由 `buildRows` 統一判斷：只涵蓋一個 CVE 的公告維持合併；涵蓋多個的是彙總公告，每個 CVE 各自成列，aliases 只放公告 ID，KEV 只看該列的 CVE；彙總公告不再出借評級，評級改查 `UBUNTU-CVE-*`／`DEBIAN-CVE-*` 或 CVE 紀錄。
 - **結果**：3,775 筆降到 560 筆，而且每一筆都是真正會執行的程式碼。全新安裝的第一次漏洞掃描也從 25 秒降到 10 秒，因為不用再分頁查詢 kernel 的 3,214 筆 advisory。
 - **嚴重度不等於優先度**：參考 Grype 的作法加入 EPSS（FIRST 預測的 30 天內被利用機率），定出透明、可解釋的優先度：
 

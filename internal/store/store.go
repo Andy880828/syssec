@@ -452,12 +452,15 @@ func (s *Store) VulnFirstSeen(ctx context.Context, vulnID string) (scanID int64,
 }
 
 // VulnIDs 回傳最近一筆 ID 或別名等於 vulnID 的漏洞所記錄的全部 ID（主 ID 在前）。
+// 主 ID 相符的列優先：舊掃描會把同一份彙總公告的其他 CVE 放進 aliases，
+// 只靠別名比對可能拿到另一個 CVE 的列。
 // mergeByCVE 會把 GO-2026-6809 這類公告改以 CVE 為主 ID 存檔，但 OSV 不一定
 // 有獨立的 CVE 紀錄；explain 靠這裡找回能查到的 OSV ID。查無時回傳 nil。
 func (s *Store) VulnIDs(ctx context.Context, vulnID string) ([]string, error) {
 	var id, aliases string
 	err := s.db.QueryRowContext(ctx, `SELECT vuln_id, aliases FROM vulns
-		WHERE vuln_id = ?1 OR ',' || aliases || ',' LIKE '%,' || ?1 || ',%' ORDER BY scan_id DESC LIMIT 1`, vulnID).Scan(&id, &aliases)
+		WHERE vuln_id = ?1 OR ',' || aliases || ',' LIKE '%,' || ?1 || ',%'
+		ORDER BY vuln_id = ?1 DESC, scan_id DESC LIMIT 1`, vulnID).Scan(&id, &aliases)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}

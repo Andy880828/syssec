@@ -14,7 +14,7 @@
 ```text
 $ sudo syssec scan --vulns
 vm  Ubuntu 24.04.5 LTS  scan #12  2026-10-30T08:54:09Z
-Score 80/100 (B)  checks 51: 21 pass, 9 fail, 6 warn, 15 skip  vulns 560 (P0 1, P1 0, fixable 1)
+Score 80/100 (B)  checks 51: 21 pass, 9 fail, 6 warn, 15 skip  vulns 569 (P0 1, P1 0, fixable 1)
 
 !  high    SYS-001  A mandatory access control LSM is active   could not determine LSM state ...
 ✗  medium  KRN-006  Symlink protection is enabled               fs.protected_symlinks = 0 (expected 1)
@@ -22,7 +22,7 @@ Score 80/100 (B)  checks 51: 21 pass, 9 fail, 6 warn, 15 skip  vulns 560 (P0 1, 
 Top vulnerabilities:
   P0  critical  epss 83%  CVE-2026-111497  brotli 1.1.0-2build2   fix: 1.1.0-2ubuntu0.1  A buffer overflow ...
   P2  high      epss 8%   CVE-2018-6952    patch 2.7.6-7build3    fix: -                 A double free ...
-  … 550 more: syssec vulns
+  … 559 more: syssec vulns
 
 Next:
   syssec vulns --priority P0 --json  # 1 actively exploited (CISA KEV); e.g. CVE-2026-111497 in brotli, fixed in 1.1.0-2ubuntu0.1
@@ -88,10 +88,12 @@ make cross      # → dist/ 下 linux/darwin/windows × amd64/arm64
 | **P3** | 其他 |
 
 為了降低雜訊還做了兩件事：
-- **同一個 CVE 只算一次**：發行版 advisory（USN/DSA/UBUNTU-CVE…）指向同一個 CVE 時會合併，其他 ID 收進 `aliases`。
+- **一列就是一個 CVE**：發行版 advisory（USN/DSA/UBUNTU-CVE…）指向同一個 CVE 時合併成一列，這些 advisory ID 收進 `aliases`。一份公告同時修補多個 CVE 時（例如 USN 的 kernel 更新），每個 CVE 各自成列，`aliases` 不放其他 CVE，所以 KEV、EPSS、嚴重度、豁免都只針對該列的 CVE。有逐 CVE 紀錄（如 `UBUNTU-CVE-*`）時以它為準，彙總公告只補上公告 ID 和修補版本。
 - **排除不會執行的套件**：kernel headers 和 kernel source 不會在主機上執行，所以不拿去比對。
 
-在 Ubuntu 24.04 實測，漏洞數從 3,775 降到 560，剩下的都是真正會執行的程式碼。
+實測（2026-11-02，KEV 目錄 2026.10.30）：
+- 這台 Ubuntu 24.04 容器：569 筆，其中 P0 1 筆。容器沒有 kernel 套件，沒有比對到彙總公告，所以拆列前後數字相同。
+- 用真實 OSV 資料模擬 HWE kernel（linux-hwe-6.14、linux-hwe-6.17）：KEV 誤標從 3 列降為 0，P0 從 11 變 10，總列數從 16,466 增為 16,848。增加的是原本被併進別列的 CVE 回到獨立列，不代表主機變差。
 
 ## 例外（waivers）
 

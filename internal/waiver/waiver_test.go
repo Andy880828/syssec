@@ -45,3 +45,16 @@ func TestFileRoundTrip(t *testing.T) {
 		t.Errorf("relative expiry: %s", d)
 	}
 }
+
+// 同一份彙總公告拆出的兩列只共用公告 ID；豁免 CVE-A 不能連帶豁免 CVE-B。
+func TestWaiverDoesNotSpreadAcrossRollupSiblings(t *testing.T) {
+	f := &File{Waivers: []core.Waiver{{ID: "CVE-2099-1000", Reason: "not reachable"}}}
+	vs := []core.Vuln{
+		{ID: "CVE-2099-1000", Package: "linux-hwe-6.17", Aliases: []string{"USN-9"}},
+		{ID: "CVE-2099-2000", Package: "linux-hwe-6.17", Aliases: []string{"USN-9"}, KEV: true},
+	}
+	f.Apply(nil, vs, time.Now())
+	if vs[0].Waiver == nil || vs[1].Waiver != nil {
+		t.Errorf("waiver leaked to the sibling CVE: %+v", vs)
+	}
+}

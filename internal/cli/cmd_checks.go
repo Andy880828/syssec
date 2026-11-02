@@ -132,6 +132,12 @@ func explainCmd() *Command {
 						score = fmt.Sprintf(", CVSS %.1f", d.CVSS)
 					}
 					fmt.Fprintf(w, "%s  [%s%s]%s\n%s\n", d.ID, d.Severity, score, kev, d.Summary)
+					if len(d.CVEs) > 0 {
+						fmt.Fprintf(w, "Rollup notice fixing %d CVEs: %s\n", len(d.CVEs), strings.Join(d.CVEs, ", "))
+						if len(d.KEVCVEs) > 0 {
+							fmt.Fprintf(w, "  ⚠ in CISA KEV: %s (explain each CVE for details)\n", strings.Join(d.KEVCVEs, ", "))
+						}
+					}
 					if len(d.Aliases) > 0 {
 						fmt.Fprintf(w, "Aliases: %s\n", strings.Join(d.Aliases, ", "))
 					}

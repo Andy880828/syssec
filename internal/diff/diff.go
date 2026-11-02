@@ -175,29 +175,38 @@ func packages(a, b []core.Package) *PackageDelta {
 	return pd
 }
 
-// vulns matches findings by package plus any shared ID or alias, so a
-// finding that is re-keyed upstream (USN-x → CVE-y, a new GHSA alias) is
-// not reported as one fix plus one new vuln.
+// vulns matches findings on the same package. A current finding is known
+// when the other report has a finding with the same ID, or one that listed
+// this ID as an alias (scans recorded before rollup notices were split per
+// CVE put sibling CVEs there, and older scans keyed findings by USN/DSA ID
+// before they were re-keyed to the CVE). Two findings that merely share an
+// alias, such as the same USN fixing two different CVEs, are not the same
+// finding: matching on that would hide a genuinely new CVE.
 func vulns(a, b []core.Vuln) *VulnDelta {
 	vd := &VulnDelta{New: []core.Vuln{}, Fixed: []core.Vuln{}}
-	index := func(vs []core.Vuln) map[string]bool {
-		m := map[string]bool{}
+	type index struct{ ids, aliases map[string]bool }
+	build := func(vs []core.Vuln) index {
+		ix := index{map[string]bool{}, map[string]bool{}}
 		for _, v := range vs {
-			for _, id := range append([]string{v.ID}, v.Aliases...) {
-				m[v.Package+"|"+id] = true
+			ix.ids[v.Package+"|"+v.ID] = true
+			for _, al := range v.Aliases {
+				ix.aliases[v.Package+"|"+al] = true
 			}
 		}
-		return m
+		return ix
 	}
-	known := func(m map[string]bool, v core.Vuln) bool {
-		for _, id := range append([]string{v.ID}, v.Aliases...) {
-			if m[v.Package+"|"+id] {
+	known := func(ix index, v core.Vuln) bool {
+		if ix.ids[v.Package+"|"+v.ID] || ix.aliases[v.Package+"|"+v.ID] {
+			return true
+		}
+		for _, al := range v.Aliases { // the other side still keyed by an advisory ID
+			if ix.ids[v.Package+"|"+al] {
 				return true
 			}
 		}
 		return false
 	}
-	old, cur := index(a), index(b)
+	old, cur := build(a), build(b)
 	for _, v := range b {
 		if !known(old, v) {
 			vd.New = append(vd.New, v)

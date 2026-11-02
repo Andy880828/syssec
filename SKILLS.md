@@ -66,7 +66,7 @@ returns one command's schema.
 | "Did my patch take effect?" | `syssec report --all --json` → SYS-007 (kernel) and SYS-008 (services to restart) |
 | "Check our apps' dependencies too" | `syssec scan --vulns --path /srv/app --json` (keep the same paths every run) |
 | "How do we do against CIS?" | `syssec report --profile cis-l1 --json`; trend: `syssec history --profile cis-l1 --json` |
-| "Are we affected by CVE-X?" | `syssec vulns --limit 0 --json`, search `id`/`aliases`; then `syssec explain CVE-X --json` |
+| "Are we affected by CVE-X?" | `syssec vulns --limit 0 --json`, match `id` (CVE rows) or `aliases` (advisory IDs); then `syssec explain CVE-X --json` |
 | "Is package P vulnerable?" | `syssec vulns --package P --json` |
 | "Why is check X failing / how to fix?" | `syssec explain X --json` |
 | "What changed since last time?" | `syssec diff --json` |
@@ -119,8 +119,15 @@ same as severity.
 - `epss` is the probability (0–1) of exploitation in the next 30 days.
 - `fixed_in` empty means there is no distro fix yet. Say so, and do not
   claim that upgrading helps.
-- `aliases` holds the other advisory IDs for the same CVE (USN, DSA, GHSA…).
-  Duplicates are already merged.
+- Every vuln row is exactly one CVE (or one non-CVE advisory). `aliases`
+  holds the advisory IDs that reported it (UBUNTU-CVE, USN, DSA, GHSA…),
+  never other CVEs. A notice that fixes several CVEs (e.g. a USN kernel
+  update) is split into one row per CVE, so `kev`, `epss` and `severity`
+  always describe that row's CVE. Rows sharing a notice ID in `aliases`
+  are fixed by the same update but are different vulnerabilities: waive
+  and report them individually.
+- `explain <USN/DSA-ID>` on such a notice returns `cves` and `kev_cves`
+  instead of a single KEV/EPSS value.
 - `in_use: true` means a running process has the vulnerable package's files
   mapped, and `processes` names the processes. `false` means confirmed not
   loaded; a missing field means unknown (not Linux, not root, or a language
