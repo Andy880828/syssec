@@ -3,6 +3,10 @@ package checks
 import (
 	"context"
 	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
 	"testing"
 	"testing/fstest"
 	"time"
@@ -178,5 +182,49 @@ func TestHostOnlyChecksSkipInContainers(t *testing.T) {
 	env.Host.Container = "docker"
 	if r := (Engine{}).Run(context.Background(), env, []Check{c}); r[0].Status != core.StatusSkip {
 		t.Errorf("host-only check should skip in a container: %+v", r[0])
+	}
+}
+
+// privilegeHint 抓出「其實是權限不足」的說法；這類結果必須走 Unverified。
+var privilegeHint = regexp.MustCompile(`(?i)\b(?:Skip|Pass)f?\(\s*"[^"]*(?:not readable|unreadable|permission|denied|as root|administrator|privileg|elevat)`)
+
+// 稽核：權限不足一律走 Unverified。曾經 sudoers、/proc 等讀不到時回報 skip，
+// 這些檢查因此不計分，非 root 掃描的分數反而比較高。
+func TestNoPrivilegeSkips(t *testing.T) {
+	for src, want := range map[string]bool{ // 偵測規則自身的正反例
+		`checks.Skip("sudoers not readable")`:            true,
+		`Skip("%s is not readable", path)`:               true,
+		`checks.Skip("permission denied (run as root)")`: true,
+		`checks.Skip("OpenSSH server is not installed")`: false,
+		`checks.Unverified("sudoers not readable")`:      false,
+	} {
+		if privilegeHint.MatchString(src) != want {
+			t.Errorf("detector on %q: got %v, want %v", src, !want, want)
+		}
+	}
+	files, skips := 0, 0
+	for _, dir := range []string{".", "builtin"} {
+		paths, err := filepath.Glob(filepath.Join(dir, "*.go"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, p := range paths {
+			if strings.HasSuffix(p, "_test.go") {
+				continue
+			}
+			b, err := os.ReadFile(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			files++
+			skips += strings.Count(string(b), "Skip(")
+			for _, m := range privilegeHint.FindAllString(string(b), -1) {
+				t.Errorf("%s: %q reports a privilege problem as skip/pass; use checks.Unverified", p, m)
+			}
+		}
+	}
+	// 空跑防護：確定真的掃到了檢查原始碼
+	if files < 10 || skips < 10 {
+		t.Fatalf("audit scanned too little (%d files, %d Skip calls): wrong working directory?", files, skips)
 	}
 }

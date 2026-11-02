@@ -85,8 +85,8 @@ returns one command's schema.
 | `pass` | compliant |
 | `fail` | non-compliant |
 | `warn` | likely issue, or could not be verified |
-| `skip` | not applicable, not readable, or host-only inside a container |
-| `error` | the probe itself failed |
+| `skip` | not applicable: not installed, wrong platform, or host-only inside a container |
+| `error` | could not be verified: missing privileges (evidence ends with `(run as root for full coverage)`) or the probe failed |
 | `waived` | accepted risk; see the `waiver` field for reason and expiry |
 
 **Summary**:
@@ -99,6 +99,8 @@ returns one command's schema.
   `sshd_config` read without root). Report those checks as unverified,
   never as passing, and compare only scans run with the same privileges.
   `diff.notes` lists checks that turned into `error`.
+- Scores are recomputed from stored check results on every read, so
+  `history` compares all scans under the current scoring rules.
 - `failed_by_severity` is the best one-line summary of checks.
 - Vulnerability counts are separate from the score: `vulns`,
   `vulns_by_priority`, `kev`, `fixable`. They exclude waived items, which

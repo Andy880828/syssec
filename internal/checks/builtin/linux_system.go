@@ -47,8 +47,14 @@ func linuxSystemChecks() []checks.Check {
 					return checks.Skip("SecureBoot variable not present")
 				}
 				b, err := env.FS.ReadFile(vars[0])
-				if err != nil || len(b) < 5 {
-					return checks.Skip("SecureBoot variable unreadable")
+				if errors.Is(err, fs.ErrPermission) {
+					return checks.Unverified("%s is not readable", vars[0])
+				}
+				if err != nil {
+					return checks.Errorf("read %s: %v", vars[0], err)
+				}
+				if len(b) < 5 {
+					return checks.Errorf("%s: unexpected %d-byte value", vars[0], len(b))
 				}
 				if b[4] == 1 { // 4-byte attribute header, then the value
 					return checks.Pass("Secure Boot enabled")

@@ -44,7 +44,7 @@ func restartChecks() []checks.Check {
 				}
 				if len(u.Stale) == 0 {
 					if !u.Complete {
-						return checks.Skip("only %d processes readable (run as root for full coverage)", u.Processes)
+						return checks.Unverified("only %d processes readable", u.Processes)
 					}
 					return checks.Pass("%d processes checked, none use replaced files", u.Processes)
 				}

@@ -141,7 +141,7 @@ func accountChecks() []checks.Check {
 					}
 				}
 				if !readAny {
-					return checks.Skip("sudoers not readable (run as root for full coverage)")
+					return checks.Unverified("sudoers not readable")
 				}
 				if len(hits) > 0 {
 					return checks.Warn("%s", sample(hits, 5))

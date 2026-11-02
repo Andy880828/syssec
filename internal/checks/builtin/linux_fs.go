@@ -171,7 +171,7 @@ func sample(items []string, n int) string {
 
 func readable(err error) checks.Outcome {
 	if errors.Is(err, fs.ErrPermission) {
-		return checks.Skip("permission denied (run as root for full coverage)")
+		return checks.Unverified("permission denied")
 	}
 	if errors.Is(err, fs.ErrNotExist) {
 		return checks.Skip("not present on this system")

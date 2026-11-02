@@ -64,6 +64,9 @@ func SSHDOption(m core.CheckMeta, key string, want Expect) Check {
 		if errors.Is(err, ErrNoSSHD) {
 			return Skip("OpenSSH server is not installed")
 		}
+		if errors.Is(err, fs.ErrPermission) {
+			return Unverified("sshd config: %v", err)
+		}
 		if err != nil {
 			return Errorf("sshd config: %v", err)
 		}
@@ -117,7 +120,7 @@ func FileRegex(m core.CheckMeta, path, pattern string, present bool, missing cor
 			return Outcome{Status: missing, Evidence: path + " does not exist"}
 		}
 		if errors.Is(err, fs.ErrPermission) {
-			return Skip("%s is not readable (run as root for full coverage)", path)
+			return Unverified("%s is not readable", path)
 		}
 		if err != nil {
 			return Errorf("read %s: %v", path, err)

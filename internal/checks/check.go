@@ -34,6 +34,16 @@ func Warn(format string, a ...any) Outcome   { return outcome(core.StatusWarn, f
 func Skip(format string, a ...any) Outcome   { return outcome(core.StatusSkip, format, a...) }
 func Errorf(format string, a ...any) Outcome { return outcome(core.StatusError, format, a...) }
 
+// UnverifiedSuffix 標示「權限不足所以沒驗到」，next_steps 與稽核測試都靠它辨識。
+const UnverifiedSuffix = " (run as root for full coverage)"
+
+// Unverified 是「權限不足、無法驗證」的唯一出口。它回報 error 而不是 skip：
+// skip 不計分，曾讓讀不到的檢查默默消失、分數反而變高；error 計入分母不給分。
+// skip 只留給真正不適用的情況（沒安裝、不在這個平台）。
+func Unverified(format string, a ...any) Outcome {
+	return outcome(core.StatusError, format+UnverifiedSuffix, a...)
+}
+
 // Func adapts a function into a Check.
 type Func struct {
 	M  core.CheckMeta

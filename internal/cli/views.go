@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/Andy880828/syssec/internal/app"
+	"github.com/Andy880828/syssec/internal/checks"
 	"github.com/Andy880828/syssec/internal/core"
 	"github.com/Andy880828/syssec/internal/diff"
 	"github.com/Andy880828/syssec/internal/intel"
@@ -105,6 +106,17 @@ func (f vulnFilter) apply(vs []core.Vuln) []core.Vuln {
 	return out
 }
 
+// unverified 計算因權限不足而沒驗到的檢查（由 checks.Unverified 產生）。
+func unverified(results []core.Result) int {
+	n := 0
+	for _, res := range results {
+		if res.Status == core.StatusError && strings.HasSuffix(res.Evidence, checks.UnverifiedSuffix) {
+			n++
+		}
+	}
+	return n
+}
+
 func nextSteps(r *core.Report) []string {
 	var steps []string
 	for _, v := range r.Vulns {
@@ -123,8 +135,8 @@ func nextSteps(r *core.Report) []string {
 	if r.Summary.VulnsByPriority["P1"] > 0 {
 		steps = append(steps, fmt.Sprintf("syssec vulns --priority P1 --json  # %d likely-exploited or critical-with-fix vulns", r.Summary.VulnsByPriority["P1"]))
 	}
-	if !r.Host.Privileged && r.Summary.Status["skip"] > 0 {
-		steps = append(steps, fmt.Sprintf("re-run as root/Administrator: %d checks were skipped or limited", r.Summary.Status["skip"]))
+	if n := unverified(r.Results); !r.Host.Privileged && n > 0 {
+		steps = append(steps, fmt.Sprintf("re-run as root/Administrator: %d checks could not be verified", n))
 	}
 	if !r.VulnScanned {
 		steps = append(steps, "syssec scan --vulns --json  # match installed packages against OSV advisories")
