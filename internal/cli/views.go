@@ -209,6 +209,9 @@ func renderReport(w io.Writer, v *reportView) {
 	fmt.Fprintf(w, "%s  %s  scan %s  %s\n", v.Host.Hostname, host, id, v.StartedAt)
 	fmt.Fprintf(w, "Score %d/100 (%s)  checks %d: %d pass, %d fail, %d warn, %d skip",
 		s.Score, s.Grade, s.Checks, s.Status["pass"], s.Status["fail"], s.Status["warn"], s.Status["skip"])
+	if n := s.Status["error"]; n > 0 {
+		fmt.Fprintf(w, ", %d error", n)
+	}
 	if v.VulnScanned {
 		fmt.Fprintf(w, "  vulns %d (P0 %d, P1 %d, fixable %d)", s.Vulns, s.VulnsByPriority["P0"], s.VulnsByPriority["P1"], s.Fixable)
 	}

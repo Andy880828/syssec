@@ -116,6 +116,19 @@ func Compute(from, to *core.Report) *Diff {
 			d.Changed = append(d.Changed, c)
 		}
 	}
+	// 由 fail/pass 變成 error 不是退步也不是修好，而是失去可見度；
+	// 不列 notes 的話，這類變化只會安靜地躺在 changed 裡。
+	var unverified []string
+	for _, c := range d.Changed {
+		if c.To == core.StatusError {
+			unverified = append(unverified, c.ID)
+		}
+	}
+	if len(unverified) > 0 {
+		slices.Sort(unverified)
+		d.Notes = append(d.Notes, fmt.Sprintf("%d checks could no longer be verified (now error: %s): their real state is unknown, re-run with the same privileges as before",
+			len(unverified), strings.Join(unverified, ", ")))
+	}
 	for _, list := range [][]CheckChange{d.Regressed, d.Resolved, d.Changed, d.Drifted} {
 		slices.SortFunc(list, func(a, b CheckChange) int {
 			if a.Severity != b.Severity {

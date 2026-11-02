@@ -1,6 +1,7 @@
 package diff
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/Andy880828/syssec/internal/core"
@@ -64,5 +65,20 @@ func TestCompute(t *testing.T) {
 	b.VulnScanned = false
 	if Compute(a, b).Vulns != nil {
 		t.Error("vuln diff requires both scans to have vuln data")
+	}
+}
+
+func TestComputeNotesLostVisibility(t *testing.T) {
+	a := &core.Report{ID: 1, Results: []core.Result{{ID: "SSH-001", Status: core.StatusFail}, {ID: "SSH-002", Status: core.StatusPass}, {ID: "OK", Status: core.StatusPass}}}
+	b := &core.Report{ID: 2, Results: []core.Result{{ID: "SSH-001", Status: core.StatusError}, {ID: "SSH-002", Status: core.StatusError}, {ID: "OK", Status: core.StatusPass}}}
+	d := Compute(a, b)
+	if d.HasRegression() || len(d.Resolved) != 0 || len(d.Changed) != 2 {
+		t.Errorf("fail/pass -> error must be neither regression nor fix: %+v", d)
+	}
+	if len(d.Notes) != 1 || !strings.Contains(d.Notes[0], "2 checks could no longer be verified") || !strings.Contains(d.Notes[0], "SSH-001, SSH-002") {
+		t.Errorf("notes: %v", d.Notes)
+	}
+	if d := Compute(a, a); len(d.Notes) != 0 {
+		t.Errorf("unchanged scan produced notes: %v", d.Notes)
 	}
 }

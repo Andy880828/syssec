@@ -375,8 +375,9 @@ type Report struct {
 }
 
 // Summarize computes the score and counters. Passed checks earn their full
-// weight, warnings half, failures none; skipped, errored and waived checks
-// are excluded.
+// weight, warnings half, failures none; skipped and waived checks are excluded.
+// 錯誤（error）計入分母但不給分：沒能驗證的檢查不能算通過。曾發生非 root 掃描
+// 讀不到 0600 的 sshd_config，8 項 SSH 檢查由 fail 變 error，分數因此從 86 升到 100。
 func Summarize(results []Result, packages int, vulns []Vuln) Summary {
 	s := Summary{
 		Checks:   len(results),
@@ -399,6 +400,8 @@ func Summarize(results []Result, packages int, vulns []Vuln) Summary {
 		case StatusFail:
 			total += 2 * w
 			s.Failed[r.Severity.String()]++
+		case StatusError:
+			total += 2 * w
 		}
 	}
 	s.Score = 100

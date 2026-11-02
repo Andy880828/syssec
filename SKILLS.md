@@ -92,7 +92,13 @@ returns one command's schema.
 **Summary**:
 - `score` (0–100) and `grade` measure configuration hardening only.
   Severity weights: critical 10, high 6, medium 3, low 1. A `warn` counts
-  half. `skip`, `error` and `waived` are excluded.
+  half. An `error` earns nothing, like a `fail`: a check that could not be
+  verified is not counted as compliant. It is not in `failed_by_severity`;
+  read `status.error`. `skip` and `waived` are excluded.
+- `status.error > 0` usually means missing privileges (e.g. a 0600
+  `sshd_config` read without root). Report those checks as unverified,
+  never as passing, and compare only scans run with the same privileges.
+  `diff.notes` lists checks that turned into `error`.
 - `failed_by_severity` is the best one-line summary of checks.
 - Vulnerability counts are separate from the score: `vulns`,
   `vulns_by_priority`, `kev`, `fixable`. They exclude waived items, which
