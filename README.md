@@ -36,7 +36,7 @@ make build      # → bin/syssec
 make cross      # → dist/ 下 linux/darwin/windows × amd64/arm64
 ```
 
-需要 Go 1.24 以上；`go.mod` 指定了 `toolchain go1.26.10`，確保編出來的 binary 使用已修補的標準庫（syssec 會用 `--path` 掃描自己的 binary 驗證這一點）。產出的二進位檔是 `CGO_ENABLED=0`，可以直接複製到目標主機執行。
+需要 Go 1.24 以上；`go.mod` 指定了 `toolchain go1.27.3`。`toolchain` 是**最低版本**：本機 Go 比它舊時會自動下載該版本，比它新時直接用本機版本，所以這個值必須是當前最新維護線的已修補版本，否則較新但未修補的本機 Go 會照樣被拿來編譯（曾發生：本機 1.27.1 高於 `go1.26.10`，編出帶 14 個 stdlib 漏洞的 binary）。用 `go version bin/syssec` 確認實際版本，並用 `syssec scan --vulns --path .` 掃描自己的 binary 驗證。產出的二進位檔是 `CGO_ENABLED=0`，可以直接複製到目標主機執行。
 
 ## 指令
 
