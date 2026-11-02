@@ -123,3 +123,46 @@ func TestScoreIsRecomputedOnRead(t *testing.T) {
 		t.Errorf("ListScans not rescored: %+v", si)
 	}
 }
+
+// v6 migration：舊資料庫只有 evidence 後綴，升級時要回填 unverified 欄位。
+func TestUnverifiedColumnAndBackfill(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "syssec.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := &core.Report{StartedAt: time.Now(), Results: []core.Result{
+		{ID: "ACC-005", Severity: core.SeverityLow, Status: core.StatusError, Evidence: "sudoers not readable (run as root for full coverage)", Unverified: true},
+		{ID: "SYS-099", Severity: core.SeverityLow, Status: core.StatusError, Evidence: "probe timed out"},
+	}}
+	id, err := s.SaveReport(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := s.LoadReport(ctx, id)
+	flags := map[string]bool{}
+	for _, x := range got.Results {
+		flags[x.ID] = x.Unverified
+	}
+	if !flags["ACC-005"] || flags["SYS-099"] {
+		t.Fatalf("round trip: %v", flags)
+	}
+	// 退回 v5 的樣子：拿掉欄位、把版本設回 5，重開後 migration 應依後綴回填。
+	for _, q := range []string{`ALTER TABLE results DROP COLUMN unverified`, `PRAGMA user_version = 5`} {
+		if _, err := s.db.ExecContext(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s.Close()
+	if s, err = Open(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	got, _ = s.LoadReport(ctx, id)
+	for _, x := range got.Results {
+		if x.Unverified != (x.ID == "ACC-005") {
+			t.Errorf("backfill: %s unverified=%v", x.ID, x.Unverified)
+		}
+	}
+}

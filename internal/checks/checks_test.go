@@ -228,3 +228,20 @@ func TestNoPrivilegeSkips(t *testing.T) {
 		t.Fatalf("audit scanned too little (%d files, %d Skip calls): wrong working directory?", files, skips)
 	}
 }
+
+// Unverified 是結構化欄位；提示後綴在截斷之後才補，超長 evidence 也保得住。
+func TestUnverifiedSurvivesTruncation(t *testing.T) {
+	long := strings.Repeat("x", 2*maxEvidence)
+	c := New(core.CheckMeta{ID: "U", Title: "u"}, func(context.Context, *sysenv.Env) Outcome { return Unverified("%s", long) })
+	r := (Engine{}).Run(context.Background(), memEnv(nil), []Check{c})[0]
+	if !r.Unverified || r.Status != core.StatusError {
+		t.Errorf("flag lost: %+v", r)
+	}
+	if len(r.Evidence) > maxEvidence || !strings.HasSuffix(r.Evidence, UnverifiedSuffix) {
+		t.Errorf("evidence len %d, suffix kept=%v", len(r.Evidence), strings.HasSuffix(r.Evidence, UnverifiedSuffix))
+	}
+	plain := New(core.CheckMeta{ID: "E", Title: "e"}, func(context.Context, *sysenv.Env) Outcome { return Errorf("probe failed") })
+	if r := (Engine{}).Run(context.Background(), memEnv(nil), []Check{plain})[0]; r.Unverified {
+		t.Errorf("a probe failure is not a privilege problem: %+v", r)
+	}
+}

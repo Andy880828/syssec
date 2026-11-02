@@ -20,8 +20,9 @@ type Check interface {
 
 // Outcome is what a check observed.
 type Outcome struct {
-	Status   core.Status
-	Evidence string
+	Status     core.Status
+	Evidence   string
+	Unverified bool // error because of missing privileges; see Unverified
 }
 
 func outcome(s core.Status, format string, a ...any) Outcome {
@@ -34,14 +35,17 @@ func Warn(format string, a ...any) Outcome   { return outcome(core.StatusWarn, f
 func Skip(format string, a ...any) Outcome   { return outcome(core.StatusSkip, format, a...) }
 func Errorf(format string, a ...any) Outcome { return outcome(core.StatusError, format, a...) }
 
-// UnverifiedSuffix 標示「權限不足所以沒驗到」，next_steps 與稽核測試都靠它辨識。
+// UnverifiedSuffix 是附在 Unverified 結果 evidence 後的人類提示。它由引擎在
+// 截斷之後才加上，所以永遠完整；程式判斷請看 Result.Unverified，不要比對這段文字。
 const UnverifiedSuffix = " (run as root for full coverage)"
 
 // Unverified 是「權限不足、無法驗證」的唯一出口。它回報 error 而不是 skip：
 // skip 不計分，曾讓讀不到的檢查默默消失、分數反而變高；error 計入分母不給分。
 // skip 只留給真正不適用的情況（沒安裝、不在這個平台）。
 func Unverified(format string, a ...any) Outcome {
-	return outcome(core.StatusError, format+UnverifiedSuffix, a...)
+	o := outcome(core.StatusError, format, a...)
+	o.Unverified = true
+	return o
 }
 
 // Func adapts a function into a Check.

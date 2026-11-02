@@ -86,7 +86,7 @@ returns one command's schema.
 | `fail` | non-compliant |
 | `warn` | likely issue, or could not be verified |
 | `skip` | not applicable: not installed, wrong platform, or host-only inside a container |
-| `error` | could not be verified: missing privileges (evidence ends with `(run as root for full coverage)`) or the probe failed |
+| `error` | could not be verified. `unverified: true` means missing privileges (re-run as root/Administrator); without it the probe itself failed |
 | `waived` | accepted risk; see the `waiver` field for reason and expiry |
 
 **Summary**:

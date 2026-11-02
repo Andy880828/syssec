@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/Andy880828/syssec/internal/app"
-	"github.com/Andy880828/syssec/internal/checks"
 	"github.com/Andy880828/syssec/internal/core"
 	"github.com/Andy880828/syssec/internal/diff"
 	"github.com/Andy880828/syssec/internal/intel"
@@ -110,7 +109,7 @@ func (f vulnFilter) apply(vs []core.Vuln) []core.Vuln {
 func unverified(results []core.Result) int {
 	n := 0
 	for _, res := range results {
-		if res.Status == core.StatusError && strings.HasSuffix(res.Evidence, checks.UnverifiedSuffix) {
+		if res.Unverified {
 			n++
 		}
 	}

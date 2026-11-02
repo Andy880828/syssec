@@ -77,6 +77,9 @@ var migrations = []string{
 	ALTER TABLE vulns ADD COLUMN path TEXT NOT NULL DEFAULT '';
 	ALTER TABLE packages ADD COLUMN path TEXT NOT NULL DEFAULT '';`,
 	`ALTER TABLE scans ADD COLUMN paths TEXT NOT NULL DEFAULT '[]';`,
+	// v6：Unverified 由 evidence 後綴改為結構化欄位；舊資料依後綴回填一次。
+	`ALTER TABLE results ADD COLUMN unverified INTEGER NOT NULL DEFAULT 0;
+	UPDATE results SET unverified = 1 WHERE status = 'error' AND evidence LIKE '%(run as root for full coverage)';`,
 }
 
 // Open opens (creating if needed) the database and applies migrations.
@@ -178,10 +181,10 @@ func (s *Store) SaveReport(ctx context.Context, r *core.Report) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	if err := bulk(ctx, tx, `INSERT INTO results (scan_id, check_id, title, category, severity, status, evidence, remediation, waiver)
-		VALUES (?,?,?,?,?,?,?,?,?)`, len(r.Results), func(i int) []any {
+	if err := bulk(ctx, tx, `INSERT INTO results (scan_id, check_id, title, category, severity, status, evidence, remediation, waiver, unverified)
+		VALUES (?,?,?,?,?,?,?,?,?,?)`, len(r.Results), func(i int) []any {
 		x := r.Results[i]
-		return []any{id, x.ID, x.Title, x.Category, x.Severity.String(), string(x.Status), x.Evidence, x.Remediation, optJSON(x.Waiver)}
+		return []any{id, x.ID, x.Title, x.Category, x.Severity.String(), string(x.Status), x.Evidence, x.Remediation, optJSON(x.Waiver), b2i(x.Unverified)}
 	}); err != nil {
 		return 0, err
 	}
@@ -330,11 +333,11 @@ func (s *Store) LoadReport(ctx context.Context, id int64) (*core.Report, error) 
 	_ = json.Unmarshal([]byte(errs), &r.Errors)
 	_ = json.Unmarshal([]byte(paths), &r.Paths)
 
-	if err := each(ctx, s.db, `SELECT check_id, title, category, severity, status, evidence, remediation, waiver FROM results WHERE scan_id = ?`, id,
+	if err := each(ctx, s.db, `SELECT check_id, title, category, severity, status, evidence, remediation, waiver, unverified FROM results WHERE scan_id = ?`, id,
 		func(sc func(...any) error) error {
 			var x core.Result
 			var sev, st, waiver string
-			if err := sc(&x.ID, &x.Title, &x.Category, &sev, &st, &x.Evidence, &x.Remediation, &waiver); err != nil {
+			if err := sc(&x.ID, &x.Title, &x.Category, &sev, &st, &x.Evidence, &x.Remediation, &waiver, &x.Unverified); err != nil {
 				return err
 			}
 			x.Waiver = parseOpt[core.Waiver](waiver)

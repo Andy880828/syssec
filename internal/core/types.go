@@ -165,6 +165,9 @@ type Result struct {
 	Evidence    string   `json:"evidence,omitempty"`
 	Remediation string   `json:"remediation,omitempty"`
 	Waiver      *Waiver  `json:"waiver,omitempty"`
+	// Unverified 表示 error 的原因是權限不足（以 root/Administrator 重跑可驗證），
+	// 而非探測本身失敗。判斷一律看這個欄位，不要比對 evidence 文字。
+	Unverified bool `json:"unverified,omitempty"`
 }
 
 // Waiver records an accepted risk. Expires is a date (YYYY-MM-DD) or empty.

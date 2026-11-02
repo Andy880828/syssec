@@ -82,6 +82,10 @@ func result(m core.CheckMeta, o Outcome) core.Result {
 		Status:   o.Status,
 		Evidence: truncate(o.Evidence, maxEvidence),
 	}
+	if o.Unverified { // 先截斷再補提示，長 evidence 也不會把它切掉
+		res.Unverified = true
+		res.Evidence = truncate(o.Evidence, maxEvidence-len(UnverifiedSuffix)) + UnverifiedSuffix
+	}
 	if o.Status == core.StatusFail || o.Status == core.StatusWarn {
 		res.Remediation = m.Remediation
 	}
