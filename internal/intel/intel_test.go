@@ -229,27 +229,6 @@ func TestPrioritize(t *testing.T) {
 	}
 }
 
-func TestCompareVersions(t *testing.T) {
-	cases := []struct {
-		a, b string
-		want int
-	}{
-		{"1.27.3", "1.27.1", 1},
-		{"1.26.10", "1.27.1", -1},
-		{"1.26.10", "1.26.9", 1}, // 數字段要依數值比，不能依字典序
-		{"v0.44.0", "0.36.0", 1},
-		{"1.27.0-0", "1.27.0", -1}, // Go 公告的 introduced 寫法，pre-release 較小
-		{"1.2", "1.2.1", -1},
-		{"1.1.0-2ubuntu0.1", "1.1.0-2build2", 1},
-		{"2.0", "2.0", 0},
-	}
-	for _, c := range cases {
-		if got := compareVersions(c.a, c.b); (got > 0) != (c.want > 0) || (got < 0) != (c.want < 0) {
-			t.Errorf("compareVersions(%q, %q) = %d, want sign %d", c.a, c.b, got, c.want)
-		}
-	}
-}
-
 // 回歸：GO-2026-6809 對 1.26 與 1.27 線各列一個修補版，舊實作對 1.27.1 回報 1.26.10（等於叫人降級）。
 func TestFixedVersionPicksInstalledBranch(t *testing.T) {
 	var v OSVVuln

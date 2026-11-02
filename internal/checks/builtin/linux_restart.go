@@ -5,9 +5,9 @@ import (
 	"path"
 	"slices"
 	"strings"
-	"unicode"
 
 	"github.com/Andy880828/syssec/internal/checks"
+	"github.com/Andy880828/syssec/internal/core"
 	"github.com/Andy880828/syssec/internal/reach"
 	"github.com/Andy880828/syssec/internal/sysenv"
 )
@@ -29,8 +29,8 @@ func restartChecks() []checks.Check {
 				case !slices.Contains(installed, running):
 					return checks.Skip("running kernel %s is not package-managed (custom or VM-provided)", running)
 				}
-				newest := slices.MaxFunc(installed, VersionCompare)
-				if VersionCompare(newest, running) > 0 {
+				newest := slices.MaxFunc(installed, core.CompareVersions)
+				if core.CompareVersions(newest, running) > 0 {
 					return checks.Fail("running %s, newest installed %s: reboot pending", running, newest)
 				}
 				return checks.Pass("running the newest installed kernel %s", running)
@@ -75,37 +75,3 @@ func installedKernels(env *sysenv.Env) []string {
 	}
 	return out
 }
-
-// VersionCompare orders version-like strings by comparing digit runs
-// numerically and everything else lexically ("6.8.0-47" < "6.8.0-100").
-func VersionCompare(a, b string) int {
-	ta, tb := tokens(a), tokens(b)
-	for i := 0; i < len(ta) && i < len(tb); i++ {
-		x, y := ta[i], tb[i]
-		if isNum(x) && isNum(y) {
-			x, y = strings.TrimLeft(x, "0"), strings.TrimLeft(y, "0")
-			if len(x) != len(y) {
-				return len(x) - len(y)
-			}
-		}
-		if c := strings.Compare(x, y); c != 0 {
-			return c
-		}
-	}
-	return len(ta) - len(tb)
-}
-
-func tokens(s string) []string {
-	var out []string
-	for i := 0; i < len(s); {
-		j := i + 1
-		for j < len(s) && unicode.IsDigit(rune(s[j])) == unicode.IsDigit(rune(s[i])) {
-			j++
-		}
-		out = append(out, s[i:j])
-		i = j
-	}
-	return out
-}
-
-func isNum(s string) bool { return s != "" && unicode.IsDigit(rune(s[0])) }
