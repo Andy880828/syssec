@@ -165,7 +165,7 @@ func (s *Service) Match(ctx context.Context, pkgs []core.Package) ([]core.Vuln, 
 			}
 			v := core.Vuln{
 				ID: a.raw.ID, Package: q.Name, Version: q.Version, Ecosystem: q.Ecosystem,
-				Severity: a.severity, CVSS: a.cvss, FixedIn: fixedVersion(a.raw, q.Name, q.Ecosystem),
+				Severity: a.severity, CVSS: a.cvss, FixedIn: fixedVersion(a.raw, q.Name, q.Ecosystem, q.Version),
 				Summary: summarize(a.raw), Aliases: cveAliases(a.raw),
 				Path: joinPaths(paths[key{q.Ecosystem, q.Name, q.Version}]),
 			}
@@ -493,21 +493,91 @@ func Severity(v OSVVuln) (core.Severity, float64) {
 	return sev, 0
 }
 
-func fixedVersion(v OSVVuln, pkg, ecosystem string) string {
+// fixedVersion 回傳「從已安裝版本升級就能修好」的版本。
+// 一則公告常對多條維護線各列一個修補版（如 Go stdlib 的 1.26.10 與 1.27.3），
+// 直接取第一個會叫 1.27.1 的使用者「降級」到 1.26.10，所以多個候選時
+// 取大於已安裝版本的最小者；全都不大於時回傳空字串，代表此維護線尚無修補。
+// 只有一個候選時沿用原值、不做比較，避免啟發式比較誤判 distro 版本字串。
+func fixedVersion(v OSVVuln, pkg, ecosystem, installed string) string {
+	var fixed []string
 	for _, a := range v.Affected {
 		if a.Package.Name != pkg || a.Package.Ecosystem != ecosystem {
 			continue
 		}
 		for _, r := range a.Ranges {
 			for _, e := range r.Events {
-				if e.Fixed != "" {
-					return e.Fixed
+				if e.Fixed != "" && !slices.Contains(fixed, e.Fixed) {
+					fixed = append(fixed, e.Fixed)
 				}
 			}
 		}
 	}
-	return ""
+	if len(fixed) <= 1 || installed == "" {
+		return strings.Join(fixed, "")
+	}
+	best := ""
+	for _, f := range fixed {
+		if compareVersions(f, installed) > 0 && (best == "" || compareVersions(f, best) < 0) {
+			best = f
+		}
+	}
+	return best
 }
+
+// compareVersions 是跨生態系的啟發式版本比較：把字串切成數字段與非數字段，
+// 數字段依數值比、非數字段依字典序比。一方是另一方的前綴時，剩餘部分以
+// "-" 或 "~" 開頭視為 pre-release（較小），否則較大。
+// 足以排序同一則公告內的修補版本，但不是完整的 semver／dpkg／rpm 實作。
+func compareVersions(a, b string) int {
+	ta, tb := versionTokens(strings.TrimPrefix(a, "v")), versionTokens(strings.TrimPrefix(b, "v"))
+	for i := range min(len(ta), len(tb)) {
+		if c := compareToken(ta[i], tb[i]); c != 0 {
+			return c
+		}
+	}
+	switch {
+	case len(ta) == len(tb):
+		return 0
+	case len(ta) > len(tb):
+		return tailSign(ta[len(tb)])
+	default:
+		return -tailSign(tb[len(ta)])
+	}
+}
+
+// tailSign 判斷較長版本多出來的部分讓它變大（1.2.1 > 1.2）還是變小（1.2-rc1 < 1.2）。
+func tailSign(tok string) int {
+	if strings.HasPrefix(tok, "-") || strings.HasPrefix(tok, "~") {
+		return -1
+	}
+	return 1
+}
+
+func versionTokens(s string) []string {
+	var out []string
+	for i := 0; i < len(s); {
+		j := i
+		digit := isDigit(s[i])
+		for j < len(s) && isDigit(s[j]) == digit {
+			j++
+		}
+		out = append(out, s[i:j])
+		i = j
+	}
+	return out
+}
+
+func compareToken(a, b string) int {
+	if isDigit(a[0]) && isDigit(b[0]) {
+		a, b = strings.TrimLeft(a, "0"), strings.TrimLeft(b, "0")
+		if len(a) != len(b) {
+			return len(a) - len(b) // 長度先比，避免超長數字溢位
+		}
+	}
+	return strings.Compare(a, b)
+}
+
+func isDigit(c byte) bool { return c >= '0' && c <= '9' }
 
 func summarize(v OSVVuln) string {
 	s := v.Summary

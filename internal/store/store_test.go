@@ -64,3 +64,27 @@ func TestRoundTrip(t *testing.T) {
 		t.Error("vuln cache miss")
 	}
 }
+
+func TestVulnIDsResolvesAlias(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "syssec.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	r := &core.Report{StartedAt: time.Now(), Host: core.Host{Hostname: "h"}, VulnScanned: true,
+		Vulns: []core.Vuln{{ID: "CVE-2026-111943", Package: "stdlib", Aliases: []string{"GO-2026-6809", "BIT-golang-2026-111943"}}}}
+	if _, err := s.SaveReport(ctx, r); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"CVE-2026-111943", "GO-2026-6809"} {
+		ids, err := s.VulnIDs(ctx, q)
+		if err != nil || len(ids) != 3 || ids[0] != "CVE-2026-111943" || ids[1] != "GO-2026-6809" {
+			t.Errorf("VulnIDs(%s) = %v, %v", q, ids, err)
+		}
+	}
+	// 別名比對要整段相等，"GO-2026-680" 不能誤中 "GO-2026-6809"
+	if ids, err := s.VulnIDs(ctx, "GO-2026-680"); err != nil || ids != nil {
+		t.Errorf("partial ID matched: %v, %v", ids, err)
+	}
+}

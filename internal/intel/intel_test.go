@@ -228,3 +228,46 @@ func TestPrioritize(t *testing.T) {
 		}
 	}
 }
+
+func TestCompareVersions(t *testing.T) {
+	cases := []struct {
+		a, b string
+		want int
+	}{
+		{"1.27.3", "1.27.1", 1},
+		{"1.26.10", "1.27.1", -1},
+		{"1.26.10", "1.26.9", 1}, // 數字段要依數值比，不能依字典序
+		{"v0.44.0", "0.36.0", 1},
+		{"1.27.0-0", "1.27.0", -1}, // Go 公告的 introduced 寫法，pre-release 較小
+		{"1.2", "1.2.1", -1},
+		{"1.1.0-2ubuntu0.1", "1.1.0-2build2", 1},
+		{"2.0", "2.0", 0},
+	}
+	for _, c := range cases {
+		if got := compareVersions(c.a, c.b); (got > 0) != (c.want > 0) || (got < 0) != (c.want < 0) {
+			t.Errorf("compareVersions(%q, %q) = %d, want sign %d", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// 回歸：GO-2026-6809 對 1.26 與 1.27 線各列一個修補版，舊實作對 1.27.1 回報 1.26.10（等於叫人降級）。
+func TestFixedVersionPicksInstalledBranch(t *testing.T) {
+	var v OSVVuln
+	if err := json.Unmarshal([]byte(`{"id":"GO-2026-6809","affected":[{"package":{"name":"stdlib","ecosystem":"Go"},
+		"ranges":[{"type":"SEMVER","events":[{"introduced":"0"},{"fixed":"1.26.10"},{"introduced":"1.27.0-0"},{"fixed":"1.27.3"}]}]}]}`), &v); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct{ installed, want string }{
+		{"1.27.1", "1.27.3"},
+		{"1.25.5", "1.26.10"},
+		{"1.28.0", ""}, // 所在維護線沒有修補版：回空字串，不建議降級
+	}
+	for _, c := range cases {
+		if got := fixedVersion(v, "stdlib", "Go", c.installed); got != c.want {
+			t.Errorf("installed %s: fixed_in = %q, want %q", c.installed, got, c.want)
+		}
+	}
+	if got := fixedVersion(v, "other", "Go", "1.0"); got != "" {
+		t.Errorf("unrelated package: %q", got)
+	}
+}

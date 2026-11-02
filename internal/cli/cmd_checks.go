@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -96,6 +97,20 @@ func explainCmd() *Command {
 					return nil, err
 				}
 				d, err := svc.Lookup(ctx, strings.ToUpper(id))
+				if errors.Is(err, intel.ErrNotFound) {
+					// vulns 列出的主 ID 常是 CVE，但 OSV 可能只有 GO-/GHSA- 紀錄；改用本地掃描記錄的別名重查。
+					if st, serr := a.Store(ctx); serr == nil {
+						ids, _ := st.VulnIDs(ctx, strings.ToUpper(id))
+						for _, alt := range ids {
+							if alt == strings.ToUpper(id) {
+								continue
+							}
+							if d, err = svc.Lookup(ctx, alt); !errors.Is(err, intel.ErrNotFound) {
+								break
+							}
+						}
+					}
+				}
 				if err != nil {
 					if err == intel.ErrNotFound {
 						return nil, &Error{Code: "not_found", Message: fmt.Sprintf("%s is neither a check ID nor a known advisory", id), Hint: "list checks with `syssec checks`", exit: ExitError}

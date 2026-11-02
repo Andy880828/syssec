@@ -421,6 +421,28 @@ func (s *Store) VulnFirstSeen(ctx context.Context, vulnID string) (scanID int64,
 	return scanID, at, err
 }
 
+// VulnIDs 回傳最近一筆 ID 或別名等於 vulnID 的漏洞所記錄的全部 ID（主 ID 在前）。
+// mergeByCVE 會把 GO-2026-6809 這類公告改以 CVE 為主 ID 存檔，但 OSV 不一定
+// 有獨立的 CVE 紀錄；explain 靠這裡找回能查到的 OSV ID。查無時回傳 nil。
+func (s *Store) VulnIDs(ctx context.Context, vulnID string) ([]string, error) {
+	var id, aliases string
+	err := s.db.QueryRowContext(ctx, `SELECT vuln_id, aliases FROM vulns
+		WHERE vuln_id = ?1 OR ',' || aliases || ',' LIKE '%,' || ?1 || ',%' ORDER BY scan_id DESC LIMIT 1`, vulnID).Scan(&id, &aliases)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("look up aliases of %s: %w", vulnID, err)
+	}
+	out := []string{id}
+	for a := range strings.SplitSeq(aliases, ",") {
+		if a != "" && a != id {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // Prune keeps the newest `keep` scans and returns how many were (or, with
 // dryRun, would be) deleted.
 func (s *Store) Prune(ctx context.Context, keep int, dryRun bool) (int64, error) {
