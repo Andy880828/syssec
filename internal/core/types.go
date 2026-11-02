@@ -374,17 +374,45 @@ type Report struct {
 	Errors           []string  `json:"errors,omitempty"`
 }
 
-// Summarize computes the score and counters. Passed checks earn their full
-// weight, warnings half, failures none; skipped and waived checks are excluded.
-// 錯誤（error）計入分母但不給分：沒能驗證的檢查不能算通過。曾發生非 root 掃描
-// 讀不到 0600 的 sshd_config，8 項 SSH 檢查由 fail 變 error，分數因此從 86 升到 100。
+// Summarize computes the score (see ScoreChecks) and counters.
 func Summarize(results []Result, packages int, vulns []Vuln) Summary {
-	s := Summary{
-		Checks:   len(results),
-		Status:   map[string]int{},
-		Failed:   map[string]int{},
-		Packages: packages,
+	s := Summary{Packages: packages}
+	s.ScoreChecks(results)
+	s.Waived = s.Status[string(StatusWaived)]
+	for _, v := range vulns {
+		if v.Waiver != nil {
+			s.Waived++
+			continue
+		}
+		if s.VulnsBySeverity == nil {
+			s.VulnsBySeverity, s.VulnsByPriority = map[string]int{}, map[string]int{}
+		}
+		s.Vulns++
+		s.VulnsBySeverity[v.Severity.String()]++
+		s.VulnsByPriority[v.Priority]++
+		if v.KEV {
+			s.KEV++
+		}
+		if v.FixedIn != "" {
+			s.Fixable++
+		}
+		if v.Running() {
+			s.Running++
+		}
 	}
+	return s
+}
+
+// ScoreChecks 由檢查結果重算 checks、status、failed_by_severity、score、grade，
+// 其餘欄位不動。這是計分的唯一決定點：存檔時呼叫，讀取舊掃描時也重算，
+// 改計分規則後歷史分數才不會新舊公式混雜（scans.score 欄位只是存檔當下的快照）。
+//
+// Passed checks earn their full weight, warnings half, failures none; skipped
+// and waived checks are excluded. 錯誤（error，含 Unverified）計入分母但不給分：
+// 沒能驗證的檢查不能算通過。曾發生非 root 掃描讀不到 0600 的 sshd_config，
+// 8 項 SSH 檢查由 fail 變 error，分數因此從 86 升到 100。
+func (s *Summary) ScoreChecks(results []Result) {
+	s.Checks, s.Status, s.Failed = len(results), map[string]int{}, map[string]int{}
 	total, earned := 0, 0
 	for _, r := range results {
 		s.Status[string(r.Status)]++
@@ -409,29 +437,6 @@ func Summarize(results []Result, packages int, vulns []Vuln) Summary {
 		s.Score = (earned*100 + total/2) / total
 	}
 	s.Grade = Grade(s.Score)
-	s.Waived = s.Status[string(StatusWaived)]
-	for _, v := range vulns {
-		if v.Waiver != nil {
-			s.Waived++
-			continue
-		}
-		if s.VulnsBySeverity == nil {
-			s.VulnsBySeverity, s.VulnsByPriority = map[string]int{}, map[string]int{}
-		}
-		s.Vulns++
-		s.VulnsBySeverity[v.Severity.String()]++
-		s.VulnsByPriority[v.Priority]++
-		if v.KEV {
-			s.KEV++
-		}
-		if v.FixedIn != "" {
-			s.Fixable++
-		}
-		if v.Running() {
-			s.Running++
-		}
-	}
-	return s
 }
 
 // Grade converts a score into a letter grade.

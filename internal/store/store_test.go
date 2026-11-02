@@ -88,3 +88,38 @@ func TestVulnIDsResolvesAlias(t *testing.T) {
 		t.Errorf("partial ID matched: %v, %v", ids, err)
 	}
 }
+
+// 回歸：計分規則改過後，history 仍讀存檔當下的 scans.score，新舊公式混雜（舊 #3、#4 顯示 100）。
+func TestScoreIsRecomputedOnRead(t *testing.T) {
+	ctx := context.Background()
+	s, err := Open(ctx, filepath.Join(t.TempDir(), "syssec.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	r := &core.Report{StartedAt: time.Now(), Host: core.Host{Hostname: "h"},
+		Results: []core.Result{
+			{ID: "A", Title: "a", Severity: core.SeverityHigh, Status: core.StatusPass},
+			{ID: "B", Title: "b", Severity: core.SeverityHigh, Status: core.StatusError},
+		},
+		Summary: core.Summary{Score: 100, Grade: "A", Vulns: 7}, // 模擬舊公式存下的快照
+	}
+	id, err := s.SaveReport(ctx, r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := s.LoadReport(ctx, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Summary.Score != 50 || got.Summary.Grade != "F" || got.Summary.Status["error"] != 1 || got.Summary.Vulns != 7 {
+		t.Errorf("LoadReport summary not rescored (or lost vuln counts): %+v", got.Summary)
+	}
+	scans, err := s.ListScans(ctx, 10)
+	if err != nil || len(scans) != 1 {
+		t.Fatalf("ListScans: %v, %v", scans, err)
+	}
+	if si := scans[0]; si.Score != 50 || si.Grade != "F" || si.Summary.Score != 50 || si.Summary.Vulns != 7 {
+		t.Errorf("ListScans not rescored: %+v", si)
+	}
+}

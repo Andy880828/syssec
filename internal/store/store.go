@@ -243,7 +243,7 @@ type ScanInfo struct {
 
 // ListScans returns the most recent scans, newest first.
 func (s *Store) ListScans(ctx context.Context, limit int) ([]ScanInfo, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, started_at, hostname, score, grade, summary_json, vuln_scanned, inventory_scanned, partial
+	rows, err := s.db.QueryContext(ctx, `SELECT id, started_at, hostname, summary_json, vuln_scanned, inventory_scanned, partial
 		FROM scans ORDER BY id DESC LIMIT ?`, limit)
 	if err != nil {
 		return nil, err
@@ -253,14 +253,40 @@ func (s *Store) ListScans(ctx context.Context, limit int) ([]ScanInfo, error) {
 	for rows.Next() {
 		var si ScanInfo
 		var at, sum string
-		if err := rows.Scan(&si.ID, &at, &si.Hostname, &si.Score, &si.Grade, &sum, &si.VulnScanned, &si.InventoryScanned, &si.Partial); err != nil {
+		if err := rows.Scan(&si.ID, &at, &si.Hostname, &sum, &si.VulnScanned, &si.InventoryScanned, &si.Partial); err != nil {
 			return nil, err
 		}
 		si.StartedAt, _ = time.Parse(time.RFC3339Nano, at)
 		_ = json.Unmarshal([]byte(sum), &si.Summary)
 		out = append(out, si)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return out, nil
+	}
+	// 分數用現行規則從檢查結果重算（見 core.Summary.ScoreChecks），不讀 scans.score 快照。
+	results := map[int64][]core.Result{}
+	if err := each(ctx, s.db, `SELECT scan_id, severity, status FROM results WHERE scan_id >= ?`, out[len(out)-1].ID,
+		func(sc func(...any) error) error {
+			var id int64
+			var sev, st string
+			if err := sc(&id, &sev, &st); err != nil {
+				return err
+			}
+			x := core.Result{Status: core.Status(st)}
+			x.Severity, _ = core.ParseSeverity(sev)
+			results[id] = append(results[id], x)
+			return nil
+		}); err != nil {
+		return nil, fmt.Errorf("rescore scan history: %w", err)
+	}
+	for i := range out {
+		out[i].Summary.ScoreChecks(results[out[i].ID])
+		out[i].Score, out[i].Grade = out[i].Summary.Score, out[i].Summary.Grade
+	}
+	return out, nil
 }
 
 // LatestID returns the newest scan ID, optionally only complete scans.
@@ -320,6 +346,7 @@ func (s *Store) LoadReport(ctx context.Context, id int64) (*core.Report, error) 
 		return nil, err
 	}
 	core.SortResults(r.Results)
+	r.Summary.ScoreChecks(r.Results) // 用現行規則重算，不信任存檔當下的分數
 	if err := each(ctx, s.db, `SELECT manager, name, version, arch, ecosystem, source_name, source_version, path FROM packages WHERE scan_id = ?`, id,
 		func(sc func(...any) error) error {
 			var p core.Package
